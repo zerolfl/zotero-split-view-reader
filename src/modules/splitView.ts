@@ -1,8 +1,21 @@
 import { getString } from "../utils/locale";
 
-const SPLIT_VIEW_ID = "addon-split-view-container";
-
+/**
+ * Multi-PDF Split View using Zotero's native split view mechanism.
+ *
+ * This approach:
+ * 1. Uses reader.toggleVerticalSplit() to enable native split view
+ * 2. Loads a different PDF into the secondary view's PDFViewerApplication
+ * 3. Benefits: menu checkmarks work, close functionality works
+ *
+ * Note: Since the secondary view is initialized for the same item as primary,
+ * annotations made in the secondary view might not persist correctly for
+ * a different PDF. The secondary view is best used for reference/reading.
+ */
 export class SplitViewFactory {
+  // Track whether we loaded a custom PDF into the secondary view
+  private static customSecondaryPDFPath: string | null = null;
+
   static registerContextMenu() {
     Zotero.Reader.registerEventListener(
       "createViewContextMenu",
@@ -31,9 +44,8 @@ export class SplitViewFactory {
   }
 
   /**
-   * Create our own split view by inserting an independent iframe next to
-   * the primary reader. This avoids Zotero's toggleVerticalSplit entirely,
-   * eliminating all race condition errors from reader.js.
+   * Open split view using Zotero's native mechanism, then load
+   * a different PDF into the secondary view.
    */
   private static async openSplitView(reader: any, pdfItem: Zotero.Item) {
     const filePath = await pdfItem.getFilePathAsync();
@@ -41,74 +53,97 @@ export class SplitViewFactory {
       throw new Error("SplitView: PDF file path not found");
     }
 
-    // Find the reader's primary iframe to insert our view next to it
     const internalReader = reader._internalReader;
-    const primaryView = internalReader._primaryView;
-    const primaryIframe = primaryView._iframe as HTMLIFrameElement;
-    const readerContainer = primaryIframe.parentElement as HTMLElement | null;
-    if (!readerContainer) {
-      throw new Error("SplitView: Cannot find reader container");
+
+    // Enable native vertical split if not already enabled
+    if (internalReader.splitType !== "vertical") {
+      reader.toggleVerticalSplit(true);
     }
 
-    // Remove existing split view if any
-    const existing = readerContainer.querySelector(`#${SPLIT_VIEW_ID}`);
-    if (existing) existing.remove();
+    // Wait for secondary view to be created
+    const secondaryView = await this.waitForSecondaryView(internalReader);
+    if (!secondaryView) {
+      throw new Error("SplitView: Secondary view not created");
+    }
 
-    // Make the container a flex row so primary + secondary sit side by side
-    readerContainer.style.display = "flex";
-    readerContainer.style.flexDirection = "row";
-    primaryIframe.style.flex = "1";
-    primaryIframe.style.minWidth = "0";
-
-    // Create our secondary container + iframe
-    const doc = primaryIframe.ownerDocument!;
-    const container = doc.createElement("div");
-    container.id = SPLIT_VIEW_ID;
-    container.style.flex = "1";
-    container.style.minWidth = "0";
-    container.style.display = "flex";
-    container.style.borderLeft = "2px solid var(--fill-quinary, #ccc)";
-
-    const secondaryIframe = doc.createElement("iframe");
-    secondaryIframe.style.width = "100%";
-    secondaryIframe.style.height = "100%";
-    secondaryIframe.style.border = "none";
-    secondaryIframe.setAttribute(
-      "src",
-      "resource://zotero/reader/pdf/web/viewer.html",
+    ztoolkit.log(
+      "SplitView: Secondary view obtained",
+      "type:",
+      typeof secondaryView,
+      "keys:",
+      Object.keys(secondaryView).slice(0, 10),
     );
 
-    container.appendChild(secondaryIframe);
-    readerContainer.appendChild(container);
+    // Get the secondary view's iframe window
+    // PDFView stores the iframe window in _iframeWindow, but we may need to wait
+    let rawWindow = secondaryView._iframeWindow;
+    let iframe = secondaryView._iframe as HTMLIFrameElement | undefined;
 
-    // Wait for the iframe to load and PDFViewerApplication to initialize
-    await new Promise<void>((resolve) => {
-      secondaryIframe.addEventListener("load", () => resolve(), { once: true });
-    });
+    ztoolkit.log(
+      "SplitView: Initial check - _iframeWindow:",
+      !!rawWindow,
+      "_iframe:",
+      !!iframe,
+    );
 
-    const rawWindow = secondaryIframe.contentWindow as any;
-    const iframeWindow = rawWindow?.wrappedJSObject || rawWindow;
-
-    // PDFViewerApplication needs time to initialize after iframe load
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        if (iframeWindow?.PDFViewerApplication?.initialized) {
+    // If no window yet, wait for iframe to load
+    if (!rawWindow && iframe) {
+      ztoolkit.log("SplitView: Waiting for iframe to load...");
+      await new Promise<void>((resolve) => {
+        const onLoad = () => {
+          iframe!.removeEventListener("load", onLoad);
           resolve();
-        } else if (iframeWindow?.PDFViewerApplication?.initializedPromise) {
-          iframeWindow.PDFViewerApplication.initializedPromise.then(resolve);
+        };
+        // Check if already loaded
+        if (iframe.contentDocument?.readyState === "complete") {
+          resolve();
         } else {
-          iframeWindow.setTimeout(check, 50);
+          iframe.addEventListener("load", onLoad);
+          // Timeout fallback
+          setTimeout(resolve, 5000);
         }
-      };
-      check();
-    });
+      });
+      rawWindow = iframe.contentWindow;
+    }
+
+    if (!rawWindow) {
+      throw new Error("SplitView: Cannot access secondary view iframe window");
+    }
+
+    const iframeWindow = (rawWindow as any)?.wrappedJSObject || rawWindow;
+    ztoolkit.log("SplitView: Got iframeWindow, loading PDF...");
+    await this.loadPDFIntoWindow(iframeWindow, filePath, pdfItem);
+  }
+
+  /**
+   * Load a PDF into an iframe window's PDFViewerApplication
+   */
+  private static async loadPDFIntoWindow(
+    iframeWindow: any,
+    filePath: string,
+    pdfItem: Zotero.Item,
+  ) {
+    // Wait for PDFViewerApplication to be initialized
+    await this.waitForPDFViewerApplication(iframeWindow);
 
     const { PDFViewerApplication } = iframeWindow;
 
-    // Load the PDF via binary data (file:// blocked by CSP)
+    // Ensure text layer is enabled for text selection
+    const pdfViewer = PDFViewerApplication.pdfViewer;
+    if (pdfViewer) {
+      pdfViewer.textLayerMode = 1; // TextLayerMode.ENABLE
+    }
+
+    // Load the new PDF via binary data
     const data = await IOUtils.read(filePath);
     const args = Cu.cloneInto({ data }, iframeWindow);
     await PDFViewerApplication.open(args);
+
+    // Track that we loaded a custom PDF
+    this.customSecondaryPDFPath = filePath;
+
+    // Fix text selection: inject CSS to ensure no overlay blocks pointer events
+    this.injectTextSelectionFix(iframeWindow);
 
     const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
       closeOnClick: true,
@@ -119,6 +154,108 @@ export class SplitViewFactory {
       })
       .show();
     popup.startCloseTimer(3000);
+  }
+
+  /**
+   * Wait for the secondary view to be created and fully initialized
+   * (including its iframe window)
+   */
+  private static waitForSecondaryView(
+    internalReader: any,
+    timeout = 10000,
+  ): Promise<any> {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      const check = () => {
+        const sv = internalReader._secondaryView;
+        if (!sv) {
+          if (Date.now() - startTime > timeout) {
+            ztoolkit.log("SplitView: Timeout - secondary view not created");
+            resolve(null);
+          } else {
+            setTimeout(check, 100);
+          }
+          return;
+        }
+
+        // Secondary view exists, now check for iframe window
+        // Try multiple ways to access the window
+        let iframeWindow = sv._iframeWindow;
+        if (!iframeWindow && sv._iframe) {
+          iframeWindow = sv._iframe.contentWindow;
+        }
+
+        if (iframeWindow) {
+          ztoolkit.log("SplitView: Secondary view iframe ready");
+          resolve(sv);
+        } else if (Date.now() - startTime > timeout) {
+          ztoolkit.log(
+            "SplitView: Timeout waiting for iframe window",
+            "_iframeWindow:",
+            !!sv._iframeWindow,
+            "_iframe:",
+            !!sv._iframe,
+            "_iframe.contentWindow:",
+            !!(sv._iframe && sv._iframe.contentWindow),
+          );
+          // Return the secondary view anyway, we'll try fallback in caller
+          resolve(sv);
+        } else {
+          setTimeout(check, 100);
+        }
+      };
+      check();
+    });
+  }
+
+  /**
+   * Wait for PDFViewerApplication to be fully initialized
+   */
+  private static waitForPDFViewerApplication(
+    iframeWindow: any,
+    timeout = 5000,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const check = () => {
+        if (iframeWindow?.PDFViewerApplication?.initialized) {
+          resolve();
+        } else if (iframeWindow?.PDFViewerApplication?.initializedPromise) {
+          iframeWindow.PDFViewerApplication.initializedPromise.then(resolve);
+        } else if (Date.now() - startTime > timeout) {
+          reject(new Error("PDFViewerApplication initialization timeout"));
+        } else {
+          iframeWindow.setTimeout(check, 50);
+        }
+      };
+      check();
+    });
+  }
+
+  /**
+   * Inject CSS to fix text selection in the secondary view
+   */
+  private static injectTextSelectionFix(iframeWindow: any) {
+    const iframeDoc = iframeWindow.document;
+    const existingFix = iframeDoc.getElementById("split-view-text-fix");
+    if (existingFix) return;
+
+    const fixStyle = iframeDoc.createElement("style");
+    fixStyle.id = "split-view-text-fix";
+    fixStyle.textContent = `
+      .textLayer {
+        pointer-events: auto !important;
+      }
+      .textLayer span,
+      .textLayer br {
+        user-select: text !important;
+        -moz-user-select: text !important;
+      }
+      .annotationEditorLayer {
+        pointer-events: none !important;
+      }
+    `;
+    iframeDoc.head.appendChild(fixStyle);
   }
 
   /**
