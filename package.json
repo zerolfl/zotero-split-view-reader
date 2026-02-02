@@ -1,24 +1,24 @@
 {
   "name": "zotero-plugin-template",
   "type": "module",
-  "version": "3.1.0",
-  "description": "Zotero Plugin Template",
+  "version": "0.0.0",
+  "description": "Enables split-view for different PDFs with synchronized scrolling",
   "config": {
-    "addonName": "Zotero Plugin Template",
-    "addonID": "addontemplate@euclpts.com",
-    "addonRef": "addontemplate",
-    "addonInstance": "AddonTemplate",
-    "prefsPrefix": "extensions.zotero.addontemplate"
+    "addonName": "Zotero Multi-View Reader",
+    "addonID": "zotero-multi-view-reader@fuling.lin.at.outlook.com",
+    "addonRef": "zotero-multi-view-reader",
+    "addonInstance": "ZoteroMultiViewReader",
+    "prefsPrefix": "extensions.zotero.${addonRef}"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/windingwind/zotero-plugin-template.git"
+    "url": "git+https://github.com/zerolfl/zotero-multi-view-reader.git"
   },
-  "author": "windingwind",
+  "author": "Fuling Lin",
   "bugs": {
-    "url": "https://github.com/windingwind/zotero-plugin-template/issues"
+    "url": "https://github.com/zerolfl/zotero-multi-view-reader/issues"
   },
-  "homepage": "https://github.com/windingwind/zotero-plugin-template#readme",
+  "homepage": "https://github.com/zerolfl/zotero-multi-view-reader#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
