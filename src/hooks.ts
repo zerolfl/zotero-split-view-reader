@@ -5,6 +5,7 @@ import {
   PromptExampleFactory,
   UIExampleFactory,
 } from "./modules/examples";
+import { SplitViewFactory } from "./modules/splitView";
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
@@ -17,6 +18,8 @@ async function onStartup() {
   ]);
 
   initLocale();
+
+  SplitViewFactory.registerContextMenu();
 
   BasicExampleFactory.registerPrefs();
 
