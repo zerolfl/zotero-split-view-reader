@@ -559,6 +559,9 @@ export class SplitViewFactory {
           this.setupCtrlKeyListener(leftBrowser);
           this.setupCtrlKeyListener(rightBrowser);
 
+          // Set up main window keyboard listener for Ctrl+=/- zoom sync
+          this.setupMainWindowKeyboardListener(win);
+
           // Set up zoom button listeners for reliable zoom sync
           this.setupZoomButtonListeners(leftBrowser);
           this.setupZoomButtonListeners(rightBrowser);
@@ -1223,6 +1226,10 @@ export class SplitViewFactory {
       const doc = wrappedWin.document;
       if (!doc) return;
 
+      // Also get the reader.html window for keyboard events
+      const readerWin = browser.contentWindow;
+      const wrappedReaderWin = readerWin ? ((readerWin as any).wrappedJSObject || readerWin) : null;
+
       const self = this;
       const isLeft = browser === this.state.leftBrowser;
 
@@ -1234,27 +1241,15 @@ export class SplitViewFactory {
           return;
         }
 
-        // Handle Ctrl+Plus/Minus for zoom sync (only from primary side)
-        if (e.ctrlKey && self.state.syncEnabled) {
-          const isPrimary = (isLeft && self.state.primarySide === "left") ||
-                            (!isLeft && self.state.primarySide === "right");
-          if (!isPrimary) return;
-
-          // Zoom in: Ctrl+= or Ctrl++ (numpad)
-          const isZoomIn = e.key === "+" || e.key === "=" ||
-                           e.code === "Equal" || e.code === "NumpadAdd";
-          // Zoom out: Ctrl+- or Ctrl+- (numpad)
-          const isZoomOut = e.key === "-" ||
-                            e.code === "Minus" || e.code === "NumpadSubtract";
-
-          if (isZoomIn) {
-            self.handleKeyboardZoom(isLeft, "in");
-          } else if (isZoomOut) {
-            self.handleKeyboardZoom(isLeft, "out");
-          }
-        }
+        // Note: Ctrl+Plus/Minus zoom sync is handled by setupMainWindowKeyboardListener
+        // to avoid duplicate handling when events propagate through multiple layers
       };
-      this.trackEventListener(doc, "keydown", keydownHandler as EventListener);
+      // Use capture phase to intercept before Zotero/PDF.js handlers
+      // Listen on both PDF iframe doc and reader window for better coverage
+      this.trackEventListener(doc, "keydown", keydownHandler as EventListener, true);
+      if (wrappedReaderWin && wrappedReaderWin.document) {
+        this.trackEventListener(wrappedReaderWin.document, "keydown", keydownHandler as EventListener, true);
+      }
 
       const keyupHandler = (e: KeyboardEvent) => {
         if (e.key === "Control" && self.state) {
@@ -1339,6 +1334,63 @@ export class SplitViewFactory {
     };
 
     this.trackEventListener(win, "resize", resizeHandler as EventListener);
+  }
+
+  /**
+   * Set up main window keyboard listener for Ctrl+=/- zoom sync
+   * This catches keyboard events at the top level before they're consumed
+   */
+  private static setupMainWindowKeyboardListener(win: Window) {
+    if (!this.state) return;
+
+    const self = this;
+
+    const keydownHandler = (e: KeyboardEvent) => {
+      if (!self.state) return;
+      if (!self.state.syncEnabled) return;
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
+
+      // Check if zoom key (support both Ctrl+=/- and Ctrl+Shift+=/-)
+      // With Shift: key is "+" or "_"
+      // Without Shift: key is "=" or "-"
+      const isZoomIn = e.key === "+" || e.key === "=" ||
+                       e.code === "Equal" || e.code === "NumpadAdd";
+      const isZoomOut = e.key === "-" || e.key === "_" ||
+                        e.code === "Minus" || e.code === "NumpadSubtract";
+
+      if (!isZoomIn && !isZoomOut) return;
+
+      // Determine which browser has focus to check if it's primary
+      const activeElement = win.document.activeElement;
+      const leftBrowserFocused = self.state.leftBrowser.contains(activeElement) ||
+                                  self.state.leftBrowser === activeElement;
+      const rightBrowserFocused = self.state.rightBrowser.contains(activeElement) ||
+                                   self.state.rightBrowser === activeElement;
+
+      // If neither browser is focused, use activeSide
+      let isLeft: boolean;
+      if (leftBrowserFocused) {
+        isLeft = true;
+      } else if (rightBrowserFocused) {
+        isLeft = false;
+      } else {
+        isLeft = self.state.activeSide === "left";
+      }
+
+      const isPrimary = (isLeft && self.state.primarySide === "left") ||
+                        (!isLeft && self.state.primarySide === "right");
+      if (!isPrimary) return;
+
+      // Sync zoom to secondary
+      if (isZoomIn) {
+        self.handleKeyboardZoom(isLeft, "in");
+      } else if (isZoomOut) {
+        self.handleKeyboardZoom(isLeft, "out");
+      }
+    };
+
+    // Use capture phase at main window level
+    this.trackEventListener(win, "keydown", keydownHandler as EventListener, true);
   }
 
   /**
