@@ -21,66 +21,20 @@ interface SplitTabState {
   rightItemID: number;
   leftParentItemID: number;
   rightParentItemID: number;
-  leftInternalReader: any;
-  rightInternalReader: any;
   syncEnabled: boolean;
   primarySide: "left" | "right";
-  activeSide: "left" | "right"; // Which PDF is currently focused/active
-  syncInterval: ReturnType<typeof setInterval> | null;
+  activeSide: "left" | "right";
   scrollHandler: (() => void) | null;
   lastPrimaryScroll: { top: number; left: number } | null;
-  lastSyncedZoom: number | null;
   notifierID: string | null;
+  syncPaused: boolean;
+  sidebarToggleTimers: number[];
+  ctrlPressed: boolean;
+  zoomingCount: number;
 }
 
 export class SplitViewFactory {
   private static state: SplitTabState | null = null;
-
-  /**
-   * Check if a browser/reader is valid
-   */
-  private static isBrowserValid(browser: XULBrowserElement | null): boolean {
-    try {
-      if (!browser) return false;
-      // Check if browser element is still in DOM
-      if (!browser.parentNode) return false;
-      // Check if contentWindow exists
-      if (!browser.contentWindow) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Get the currently active reader from Zotero (for context menu)
-   */
-  private static getCurrentReader(): any {
-    try {
-      const readers = (Zotero.Reader as any)._readers || [];
-      for (const r of readers) {
-        try {
-          if (r.itemID && r.tabID) {
-            return r;
-          }
-        } catch {
-          continue;
-        }
-      }
-      for (const r of readers) {
-        try {
-          if (r.itemID) {
-            return r;
-          }
-        } catch {
-          continue;
-        }
-      }
-    } catch (e) {
-      ztoolkit.log("SplitView: Error getting current reader", e);
-    }
-    return null;
-  }
 
   static registerContextMenu() {
     Zotero.Reader.registerEventListener(
@@ -98,15 +52,10 @@ export class SplitViewFactory {
           label: getString("splitview-menu-label"),
           checked: isInSplitView,
           onCommand: () => {
-            try {
-              if (isInSplitView) {
-                this.closeSplitTab();
-              } else {
-                this.handleSplitView(reader);
-              }
-            } catch (e) {
-              ztoolkit.log("SplitView: Error in menu command", e);
-              this.cleanup();
+            if (isInSplitView) {
+              this.closeSplitTab();
+            } else {
+              this.handleSplitView(reader);
             }
           },
         });
@@ -201,8 +150,7 @@ export class SplitViewFactory {
       if (!selectedPDF) return;
 
       await this.openSplitTab(reader.itemID, selectedPDF);
-    } catch (e) {
-      ztoolkit.log("SplitView: Error in handleSplitView", e);
+    } catch {
       this.cleanup();
     }
   }
@@ -237,17 +185,15 @@ export class SplitViewFactory {
   }
 
   /**
-   * Initialize sync state - record primary's current position and sync zoom
+   * Initialize sync state - record primary's current position
    */
   private static initSyncState() {
     if (!this.state) return;
 
-    const primaryContainer = this.state.primarySide === "left"
-      ? this.getViewerContainerFromBrowser(this.state.leftBrowser)
-      : this.getViewerContainerFromBrowser(this.state.rightBrowser);
-    const secondaryBrowser = this.state.primarySide === "left"
-      ? this.state.rightBrowser
-      : this.state.leftBrowser;
+    const primaryBrowser = this.state.primarySide === "left"
+      ? this.state.leftBrowser
+      : this.state.rightBrowser;
+    const primaryContainer = this.getViewerContainerFromBrowser(primaryBrowser);
 
     if (primaryContainer) {
       this.state.lastPrimaryScroll = {
@@ -255,19 +201,152 @@ export class SplitViewFactory {
         left: primaryContainer.scrollLeft,
       };
     }
+  }
 
-    // Sync zoom immediately
-    const primaryZoom = this.state.primarySide === "left"
-      ? this.getZoomLevelFromBrowser(this.state.leftBrowser)
-      : this.getZoomLevelFromBrowser(this.state.rightBrowser);
-    if (primaryZoom !== null) {
-      this.setZoomLevelForBrowser(secondaryBrowser, primaryZoom);
-      this.state.lastSyncedZoom = primaryZoom;
+  /**
+   * Set up zoom button listeners on a browser's toolbar
+   * This directly hooks into zoom button clicks for reliable sync
+   */
+  private static setupZoomButtonListeners(browser: XULBrowserElement) {
+    if (!this.state) return;
+
+    try {
+      // The zoom buttons are in the reader's main document (browser.contentWindow),
+      // NOT in the inner PDF.js iframe
+      const win = browser.contentWindow;
+      if (!win) return;
+
+      const wrappedWin = (win as any).wrappedJSObject || win;
+      const doc = wrappedWin.document;
+      if (!doc) return;
+
+      // Find zoom buttons in the toolbar
+      // Try multiple selectors as Zotero's reader may use different ones
+      // Search for button with zoom-in/zoom-out icons or titles
+      const findButton = (type: "in" | "out"): Element | null => {
+        const selectors = type === "in" ? [
+          '[data-l10n-id="pdfjs-zoom-in-button"]',
+          '#zoomIn',
+          '.zoomIn',
+          'button[class*="zoomIn"]',
+          'button[class*="zoom-in"]',
+          '[title*="Zoom In"]',
+          '[title*="zoom in"]',
+          '[aria-label*="Zoom In"]',
+          '[aria-label*="zoom in"]',
+          // Zotero reader specific
+          'button[data-tabstop="1"][class*="zoom"]',
+        ] : [
+          '[data-l10n-id="pdfjs-zoom-out-button"]',
+          '#zoomOut',
+          '.zoomOut',
+          'button[class*="zoomOut"]',
+          'button[class*="zoom-out"]',
+          '[title*="Zoom Out"]',
+          '[title*="zoom out"]',
+          '[aria-label*="Zoom Out"]',
+          '[aria-label*="zoom out"]',
+        ];
+
+        for (const selector of selectors) {
+          try {
+            const btn = doc.querySelector(selector);
+            if (btn) return btn;
+          } catch {
+            // Invalid selector, skip
+          }
+        }
+
+        // Try finding by icon class patterns
+        const allButtons = doc.querySelectorAll('button, [role="button"]');
+        for (const btn of allButtons) {
+          const className = (btn.className || "").toLowerCase();
+          const title = (btn.getAttribute("title") || "").toLowerCase();
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+          if (type === "in") {
+            if (className.includes("zoomin") || className.includes("zoom-in") ||
+                title.includes("zoom in") || ariaLabel.includes("zoom in") ||
+                title.includes("放大") || ariaLabel.includes("放大")) {
+              return btn;
+            }
+          } else {
+            if (className.includes("zoomout") || className.includes("zoom-out") ||
+                title.includes("zoom out") || ariaLabel.includes("zoom out") ||
+                title.includes("缩小") || ariaLabel.includes("缩小")) {
+              return btn;
+            }
+          }
+        }
+
+        return null;
+      };
+
+      const zoomInBtn = findButton("in");
+      const zoomOutBtn = findButton("out");
+
+      const self = this;
+      const isLeft = browser === this.state.leftBrowser;
+
+      if (zoomInBtn) {
+        zoomInBtn.addEventListener("click", () => {
+          self.handleZoomButtonClick(isLeft, "in");
+        }, true);
+      }
+
+      if (zoomOutBtn) {
+        zoomOutBtn.addEventListener("click", () => {
+          self.handleZoomButtonClick(isLeft, "out");
+        }, true);
+      }
+
+    } catch (e) {
+      ztoolkit.log("SplitView: Error setting up zoom button listeners", e);
+    }
+  }
+
+  /**
+   * Handle zoom button click - sync to secondary if this is primary
+   */
+  private static handleZoomButtonClick(isLeft: boolean, direction: "in" | "out") {
+    if (!this.state) return;
+    if (!this.state.syncEnabled) return;
+
+    // Only sync from primary to secondary
+    const isPrimary = (isLeft && this.state.primarySide === "left") ||
+                      (!isLeft && this.state.primarySide === "right");
+    if (!isPrimary) return;
+
+    // Skip if Ctrl is pressed (user doing Ctrl+wheel zoom shouldn't sync)
+    if (this.state.ctrlPressed) return;
+
+    const secondaryBrowser = this.state.primarySide === "left"
+      ? this.state.rightBrowser
+      : this.state.leftBrowser;
+
+    // Pause scroll sync during zoom
+    this.state.zoomingCount++;
+
+    // Sync zoom action to secondary immediately
+    if (direction === "in") {
+      this.zoomInForBrowser(secondaryBrowser);
+    } else {
+      this.zoomOutForBrowser(secondaryBrowser);
     }
 
-    ztoolkit.log("SplitView: Sync initialized",
-      "lastPrimaryScroll:", this.state.lastPrimaryScroll,
-      "zoom:", this.state.lastSyncedZoom);
+    // Resume scroll sync after a delay, and reinitialize sync state
+    // to prevent position jump (zoom changes scroll positions)
+    const win = Zotero.getMainWindow();
+    win.setTimeout(() => {
+      if (this.state) {
+        this.state.zoomingCount = Math.max(0, this.state.zoomingCount - 1);
+        // Reinitialize sync state after zoom completes
+        // This updates lastPrimaryScroll to current position
+        if (this.state.zoomingCount === 0) {
+          this.initSyncState();
+        }
+      }
+    }, 150); // Slightly longer to ensure zoom animation completes
   }
 
   /**
@@ -296,7 +375,6 @@ export class SplitViewFactory {
       },
       select: true,
       onClose: () => {
-        ztoolkit.log("SplitView: Tab closed");
         this.cleanup();
       },
     });
@@ -366,16 +444,16 @@ export class SplitViewFactory {
       rightItemID: secondaryPDF.id,
       leftParentItemID,
       rightParentItemID,
-      leftInternalReader: null,
-      rightInternalReader: null,
       syncEnabled: true,
       primarySide: "left",
-      activeSide: "left", // Left is initially active
-      syncInterval: null,
+      activeSide: "left",
       scrollHandler: null,
       lastPrimaryScroll: null,
-      lastSyncedZoom: null,
       notifierID: null,
+      syncPaused: false,
+      sidebarToggleTimers: [],
+      ctrlPressed: false,
+      zoomingCount: 0,
     };
 
     // Set up focus listeners for context pane switching
@@ -394,10 +472,6 @@ export class SplitViewFactory {
         this.initializeReader(rightBrowser, rightItem, rightPopupset),
       ]);
 
-      // Store internal reader references
-      this.state.leftInternalReader = this.getInternalReaderFromBrowser(leftBrowser);
-      this.state.rightInternalReader = this.getInternalReaderFromBrowser(rightBrowser);
-
       // Show success notification
       const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
         closeOnClick: true,
@@ -409,23 +483,29 @@ export class SplitViewFactory {
         .show();
       popup.startCloseTimer(3000);
 
-      // Enable sync by default after a short delay
+      // Enable sync and set up listeners after a short delay (ensure iframes are ready)
       setTimeout(() => {
         if (this.state && this.state.syncEnabled) {
+          // Initialize scroll sync
           this.initSyncState();
           this.startSyncPolling();
-          ztoolkit.log("SplitView: Sync enabled by default");
+
+          // Set up Ctrl key listeners for detecting Ctrl+wheel zoom
+          this.setupCtrlKeyListener(leftBrowser);
+          this.setupCtrlKeyListener(rightBrowser);
+
+          // Set up zoom button listeners for reliable zoom sync
+          this.setupZoomButtonListeners(leftBrowser);
+          this.setupZoomButtonListeners(rightBrowser);
         }
       }, 500);
 
-      // Initialize context pane with left (primary) PDF's parent item
       setTimeout(() => {
         if (this.state) {
           this.updateContextPane(win, this.state.leftParentItemID);
         }
       }, 300);
     } catch (e) {
-      ztoolkit.log("SplitView: Error initializing readers", e);
       this.cleanup();
       throw e;
     }
@@ -505,11 +585,9 @@ export class SplitViewFactory {
               json[key] = json[key] || "";
             }
           }
-          // Ensure tags is always an array
           json.tags = json.tags || [];
           return json;
-        } catch (e) {
-          ztoolkit.log("SplitView: Error getting annotation", e);
+        } catch {
           return null;
         }
       })
@@ -575,8 +653,9 @@ export class SplitViewFactory {
       onChangeSidebarWidth: (_width: number) => {
         // No-op for split view
       },
-      onChangeViewState: (_state: any, _primary: boolean) => {
-        // No-op for split view - we don't persist view state
+      onChangeViewState: (viewState: any, _primary: boolean) => {
+        // Sync zoom when scale changes (toolbar zoom in/out)
+        self.handleViewStateChange(browserRef, viewState);
       },
       onSaveAnnotations: async (annotations: any[], callback: () => void) => {
         await self.handleAnnotationSave(itemRef, annotations);
@@ -634,11 +713,9 @@ export class SplitViewFactory {
       const doc = wrappedWin.document;
       if (!doc) return;
 
-      // Find and hide the sidenav element inside the reader
       const sidenav = doc.querySelector(".sidenav, reader-sidenav, #sidenav, [class*='sidenav']");
       if (sidenav) {
         sidenav.style.display = "none";
-        ztoolkit.log("SplitView: Hidden reader internal sidenav");
       }
 
       // Also try to find any context pane toggle buttons
@@ -663,8 +740,8 @@ export class SplitViewFactory {
           });
         }
       }
-    } catch (e) {
-      ztoolkit.log("SplitView: Error hiding reader sidenav", e);
+    } catch {
+      // Ignore errors
     }
   }
 
@@ -832,15 +909,12 @@ export class SplitViewFactory {
     const attachment = Zotero.Items.get(item.id);
     try {
       for (const annotation of annotations) {
-        // Set key from id (reader uses id, Zotero uses key)
         annotation.key = annotation.id;
-        // Remove authorName to prevent setting annotationAuthorName unnecessarily
         delete annotation.authorName;
-        // Save annotation using Zotero's API
         await Zotero.Annotations.saveFromJSON(attachment, annotation);
       }
-    } catch (e) {
-      ztoolkit.log("SplitView: Error saving annotations", e);
+    } catch {
+      // Ignore annotation save errors
     }
   }
 
@@ -854,18 +928,18 @@ export class SplitViewFactory {
     try {
       for (const key of ids) {
         const annotation = Zotero.Items.getByLibraryAndKey(libraryID, key);
-        // Make sure the annotation actually belongs to the current PDF
         if (annotation && annotation.isAnnotation() && annotation.parentID === item.id) {
           await annotation.eraseTx();
         }
       }
-    } catch (e) {
-      ztoolkit.log("SplitView: Error deleting annotations", e);
+    } catch {
+      // Ignore annotation delete errors
     }
   }
 
   /**
    * Handle sidebar toggle - sync to the other reader when sync is enabled
+   * Pauses scroll sync during sidebar animation to prevent position drift
    */
   private static handleSidebarToggle(sourceBrowser: XULBrowserElement, open: boolean) {
     if (!this.state) return;
@@ -879,6 +953,16 @@ export class SplitViewFactory {
     // Only sync from primary to secondary
     if (!isPrimary) return;
 
+    // Cancel any pending timers from previous toggle (debounce)
+    const win = Zotero.getMainWindow();
+    for (const timerId of this.state.sidebarToggleTimers) {
+      win.clearTimeout(timerId);
+    }
+    this.state.sidebarToggleTimers = [];
+
+    // Pause sync during sidebar toggle to prevent position drift
+    this.state.syncPaused = true;
+
     // Get the secondary browser
     const secondaryBrowser = isLeft ? this.state.rightBrowser : this.state.leftBrowser;
 
@@ -888,15 +972,27 @@ export class SplitViewFactory {
       if (internalReader && typeof internalReader.toggleSidebar === "function") {
         internalReader.toggleSidebar(open);
       } else if (internalReader && internalReader._primaryView) {
-        // Try alternative method - set sidebar state directly
         const primaryView = internalReader._primaryView;
         if (primaryView && typeof primaryView.setSidebarOpen === "function") {
           primaryView.setSidebarOpen(open);
         }
       }
-    } catch (e) {
-      ztoolkit.log("SplitView: Error syncing sidebar toggle", e);
+    } catch {
+      // Ignore errors
     }
+
+    // Resume sync after sidebar animation completes and reinitialize position
+    // Only set one timer - the final one that resumes sync
+    const timerId = win.setTimeout(() => {
+      if (!this.state) return;
+      // Reinitialize sync state with current positions
+      this.initSyncState();
+      this.state.syncPaused = false;
+      // Clear timer list
+      this.state.sidebarToggleTimers = [];
+    }, 200);
+
+    this.state.sidebarToggleTimers.push(timerId);
   }
 
   /**
@@ -905,20 +1001,17 @@ export class SplitViewFactory {
   private static closeSplitTab() {
     if (!this.state) return;
 
-    ztoolkit.log("SplitView: Closing split tab");
-
     const tabID = this.state.tabID;
 
     // Cleanup state first
     this.cleanup();
 
-    // Close the tab
     try {
       const win = Zotero.getMainWindow();
       const Zotero_Tabs = (win as any).Zotero_Tabs;
       Zotero_Tabs.close(tabID);
-    } catch (e) {
-      ztoolkit.log("SplitView: Error closing tab", e);
+    } catch {
+      // Ignore errors
     }
 
     const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
@@ -938,28 +1031,15 @@ export class SplitViewFactory {
   private static startSyncPolling() {
     if (!this.state) return;
 
-    ztoolkit.log("SplitView: Starting scroll sync, primary side:", this.state.primarySide);
-
     const primaryBrowser = this.state.primarySide === "left"
       ? this.state.leftBrowser
       : this.state.rightBrowser;
 
     const primaryContainer = this.getViewerContainerFromBrowser(primaryBrowser);
-    if (!primaryContainer) {
-      ztoolkit.log("SplitView: Could not find primary container for scroll listener");
-      return;
-    }
+    if (!primaryContainer) return;
 
-    // Create scroll handler
     this.state.scrollHandler = () => this.syncViews();
-
-    // Listen to scroll events
     primaryContainer.addEventListener("scroll", this.state.scrollHandler, { passive: true });
-
-    // Backup interval for zoom sync
-    this.state.syncInterval = setInterval(() => {
-      this.syncZoomOnly();
-    }, 200);
   }
 
   /**
@@ -979,12 +1059,6 @@ export class SplitViewFactory {
       }
       this.state.scrollHandler = null;
     }
-
-    // Clear zoom sync interval
-    if (this.state.syncInterval) {
-      clearInterval(this.state.syncInterval);
-      this.state.syncInterval = null;
-    }
   }
 
   private static SYNC_THRESHOLD = 1;
@@ -995,6 +1069,13 @@ export class SplitViewFactory {
   private static syncViews() {
     if (!this.state) return;
     if (!this.state.lastPrimaryScroll) return;
+    if (this.state.syncPaused) return; // Skip sync during sidebar toggle
+
+    // Skip scroll sync when Ctrl is pressed (user is doing Ctrl+wheel zoom)
+    if (this.state.ctrlPressed) return;
+
+    // Skip scroll sync during zoom operations
+    if (this.state.zoomingCount > 0) return;
 
     try {
       const primaryBrowser = this.state.primarySide === "left"
@@ -1027,88 +1108,45 @@ export class SplitViewFactory {
   }
 
   /**
-   * Sync zoom only
+   * Call zoomIn on a browser's internal reader
    */
-  private static syncZoomOnly() {
-    if (!this.state) return;
-
-    try {
-      const primaryBrowser = this.state.primarySide === "left"
-        ? this.state.leftBrowser
-        : this.state.rightBrowser;
-      const secondaryBrowser = this.state.primarySide === "left"
-        ? this.state.rightBrowser
-        : this.state.leftBrowser;
-
-      this.syncZoom(primaryBrowser, secondaryBrowser);
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  private static ZOOM_THRESHOLD = 0.01;
-
-  /**
-   * Sync zoom level from primary to secondary
-   */
-  private static syncZoom(primaryBrowser: XULBrowserElement, secondaryBrowser: XULBrowserElement) {
-    if (!this.state) return;
-
-    const primaryZoom = this.getZoomLevelFromBrowser(primaryBrowser);
-    if (primaryZoom === null) return;
-
-    if (this.state.lastSyncedZoom !== null &&
-        Math.abs(primaryZoom - this.state.lastSyncedZoom) < this.ZOOM_THRESHOLD) {
-      return;
-    }
-
-    this.setZoomLevelForBrowser(secondaryBrowser, primaryZoom);
-    this.state.lastSyncedZoom = primaryZoom;
-  }
-
-  /**
-   * Get zoom level from browser
-   */
-  private static getZoomLevelFromBrowser(browser: XULBrowserElement): number | null {
+  private static zoomInForBrowser(browser: XULBrowserElement) {
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return null;
-
-      const primaryView = internalReader._primaryView;
-      if (!primaryView) return null;
-
-      const iframe = primaryView._iframe;
-      if (!iframe) return null;
-
-      const iframeWin = iframe.contentWindow;
-      if (!iframeWin) return null;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      const pdfViewer = wrappedWin.PDFViewerApplication?.pdfViewer;
-      if (pdfViewer && typeof pdfViewer.currentScale === "number") {
-        return pdfViewer.currentScale;
+      if (internalReader && typeof internalReader.zoomIn === "function") {
+        internalReader.zoomIn();
       }
-      return null;
     } catch {
-      return null;
+      // Ignore zoom errors
     }
   }
 
   /**
-   * Set zoom level for browser
+   * Call zoomOut on a browser's internal reader
    */
-  private static setZoomLevelForBrowser(browser: XULBrowserElement, scale: number) {
+  private static zoomOutForBrowser(browser: XULBrowserElement) {
+    try {
+      const internalReader = this.getInternalReaderFromBrowser(browser);
+      if (internalReader && typeof internalReader.zoomOut === "function") {
+        internalReader.zoomOut();
+      }
+    } catch {
+      // Ignore zoom errors
+    }
+  }
+
+  /**
+   * Set up Ctrl key listener on a browser's iframe to detect Ctrl+wheel zoom
+   */
+  private static setupCtrlKeyListener(browser: XULBrowserElement) {
+    if (!this.state) return;
+
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (!internalReader) return;
 
       const primaryView = internalReader._primaryView;
       if (!primaryView) return;
-
-      if (typeof primaryView.setScale === "function") {
-        primaryView.setScale(scale);
-        return;
-      }
 
       const iframe = primaryView._iframe;
       if (!iframe) return;
@@ -1117,19 +1155,38 @@ export class SplitViewFactory {
       if (!iframeWin) return;
 
       const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      const pdfViewer = wrappedWin.PDFViewerApplication?.pdfViewer;
-      if (pdfViewer && typeof pdfViewer.currentScale === "number") {
-        wrappedWin.setTimeout(() => {
-          try {
-            pdfViewer.currentScale = scale;
-          } catch {
-            // Ignore
-          }
-        }, 0);
-      }
+      const doc = wrappedWin.document;
+      if (!doc) return;
+
+      const self = this;
+
+      doc.addEventListener("keydown", (e: KeyboardEvent) => {
+        if (e.key === "Control" && self.state) {
+          self.state.ctrlPressed = true;
+        }
+      });
+
+      doc.addEventListener("keyup", (e: KeyboardEvent) => {
+        if (e.key === "Control" && self.state) {
+          self.state.ctrlPressed = false;
+        }
+      });
+
+      wrappedWin.addEventListener("blur", () => {
+        if (self.state) {
+          self.state.ctrlPressed = false;
+        }
+      });
     } catch {
-      // Ignore
+      // Ignore errors
     }
+  }
+
+  /**
+   * Handle view state change (no-op, zoom sync is done via button listeners)
+   */
+  private static handleViewStateChange(_sourceBrowser: XULBrowserElement, _viewState: any) {
+    // Zoom sync is handled by setupZoomButtonListeners for reliability
   }
 
   /**
@@ -1180,20 +1237,13 @@ export class SplitViewFactory {
       const parentItemID = side === "left"
         ? self.state.leftParentItemID
         : self.state.rightParentItemID;
-
-      ztoolkit.log(`SplitView: Focus changed to ${side} side, item ${parentItemID}`);
       self.updateContextPane(win, parentItemID);
     };
 
-    // Add click listeners to browser elements
     leftBrowser.addEventListener("click", () => handleFocus("left"), true);
     rightBrowser.addEventListener("click", () => handleFocus("right"), true);
-
-    // Also listen for focus events
     leftBrowser.addEventListener("focus", () => handleFocus("left"), true);
     rightBrowser.addEventListener("focus", () => handleFocus("right"), true);
-
-    ztoolkit.log("SplitView: Focus listeners set up for context pane switching");
   }
 
   /**
@@ -1206,42 +1256,22 @@ export class SplitViewFactory {
 
       const document = win.document;
       const item = Zotero.Items.get(parentItemID);
-      if (!item) {
-        ztoolkit.log(`SplitView: Item ${parentItemID} not found`);
-        return;
-      }
+      if (!item) return;
 
-      // Don't force context pane open - respect user's previous collapsed state
-      // The sidenav (toggle button) will remain visible via CSS even when collapsed
-
-      // Get context-pane element
       const contextPaneElement = document.querySelector("context-pane") as any;
-      if (!contextPaneElement) {
-        ztoolkit.log(`SplitView: context-pane element not found`);
-        return;
-      }
+      if (!contextPaneElement) return;
 
-      // Access the item pane deck (from Zotero's contextPane.js)
       const itemPaneDeck = contextPaneElement._itemPaneDeck;
-      if (!itemPaneDeck) {
-        ztoolkit.log(`SplitView: _itemPaneDeck not found`);
-        return;
-      }
+      if (!itemPaneDeck) return;
 
-      // Find the item-details element for our tab
       let itemDetails = itemPaneDeck.querySelector(`[data-tab-id="${this.state.tabID}"]`) as any;
 
       if (itemDetails) {
-        // Update the item property directly
         itemDetails.item = item;
-        // Re-render if the method exists
         if (typeof itemDetails.render === "function") {
           itemDetails.render();
         }
-        ztoolkit.log(`SplitView: Updated item-details.item to ${parentItemID} (${item.getField("title")})`);
       } else {
-        // Item-details doesn't exist for our tab, create one
-        ztoolkit.log(`SplitView: Creating new item-details for tab ${this.state.tabID}`);
 
         itemDetails = document.createXULElement("item-details");
         itemDetails.id = this.state.tabID + "-context";
@@ -1259,19 +1289,14 @@ export class SplitViewFactory {
         itemDetails.tabType = "reader"; // Use reader type for proper rendering
         itemDetails.item = item;
 
-        // Set sidenav if available
         if (contextPaneElement._sidenav) {
           itemDetails.sidenav = contextPaneElement._sidenav;
         }
-
-        ztoolkit.log(`SplitView: Created item-details for item ${parentItemID}`);
       }
 
-      // Make sure our item-details is selected in the deck
       itemPaneDeck.selectedPanel = itemDetails;
-
-    } catch (e) {
-      ztoolkit.log("SplitView: Error updating context pane", e);
+    } catch {
+      // Ignore context pane errors
     }
   }
 
@@ -1293,72 +1318,52 @@ export class SplitViewFactory {
         if (action === "select") {
           const selectedTabID = String(ids[0]);
           if (selectedTabID === self.state.tabID) {
-            // Our tab was selected - show context pane and add active class
             win.document.documentElement?.classList.add("split-view-active");
-            self.showContextPaneForSplitView(win, true);
+            self.showContextPaneForSplitView(win);
           } else {
-            // Another tab was selected - remove active class
             win.document.documentElement?.classList.remove("split-view-active");
           }
         }
       },
     };
 
-    // Register the notifier with high priority (like contextPane does)
     const notifierID = Zotero.Notifier.registerObserver(notifierCallback, ["tab"], "splitView", 20);
     this.state.notifierID = notifierID;
-
-    ztoolkit.log("SplitView: Tab notifier registered");
   }
 
   /**
    * Show context pane elements for our split view tab
-   * Mimics what Zotero does for reader tabs in contextPane.js _handleTabSelect
    */
-  private static showContextPaneForSplitView(win: Window, log = false) {
+  private static showContextPaneForSplitView(win: Window) {
     const document = win.document;
     const ZoteroContextPane = (win as any).ZoteroContextPane;
+    if (!ZoteroContextPane) return;
 
-    if (!ZoteroContextPane) {
-      return;
-    }
-
-    // Show the context pane splitter (hidden="false")
     const splitter = ZoteroContextPane.splitter;
     if (splitter) {
       splitter.setAttribute("hidden", "false");
     }
 
-    // Show the sidenav (contains toggle button) - try multiple ways
     const sidenav = ZoteroContextPane.sidenav;
     if (sidenav) {
       sidenav.hidden = false;
       sidenav.removeAttribute("hidden");
-      // Ensure it's visible
       sidenav.style.display = "";
       sidenav.style.visibility = "visible";
     }
 
-    // Also get sidenav directly by ID as backup
     const sidenavById = document.getElementById("zotero-context-pane-sidenav") as HTMLElement | null;
     if (sidenavById) {
       (sidenavById as any).hidden = false;
       sidenavById.removeAttribute("hidden");
     }
 
-    // Get the context pane box - ensure it's not hidden
     const contextPaneBox = document.getElementById("zotero-context-pane");
     if (contextPaneBox) {
       contextPaneBox.removeAttribute("hidden");
-      // Don't touch collapsed - let user control it via toggle button
     }
 
-    // Inject CSS to keep sidenav visible even when context pane is collapsed
     this.injectSidenavCSS(document);
-
-    if (log) {
-      ztoolkit.log("SplitView: Context pane shown for split view");
-    }
   }
 
   /**
@@ -1432,29 +1437,22 @@ export class SplitViewFactory {
     const target = document.head || document.documentElement;
     if (target) {
       target.appendChild(style);
-      ztoolkit.log("SplitView: Injected sidenav CSS");
     }
 
-    // Add the active class since we're in split view
     document.documentElement?.classList.add("split-view-active");
   }
 
   /**
    * Set up context pane for our split view tab
-   * Makes our tab behave like a normal reader tab with proper context pane support
    */
   private static setupContextPane(win: Window) {
     if (!this.state) return;
 
-    // Initial setup - show context pane immediately (with logging)
-    this.showContextPaneForSplitView(win, true);
-
-    // Also set up with delays to handle async Zotero updates
+    this.showContextPaneForSplitView(win);
     win.setTimeout(() => this.showContextPaneForSplitView(win), 50);
     win.setTimeout(() => this.showContextPaneForSplitView(win), 150);
     win.setTimeout(() => this.showContextPaneForSplitView(win), 300);
 
-    // Set up periodic check to maintain the state (less frequent, no logging)
     const checkInterval = win.setInterval(() => {
       if (!this.state) {
         win.clearInterval(checkInterval);
@@ -1462,14 +1460,11 @@ export class SplitViewFactory {
       }
       const Zotero_Tabs = (win as any).Zotero_Tabs;
       if (Zotero_Tabs && Zotero_Tabs.selectedID === this.state.tabID) {
-        this.showContextPaneForSplitView(win, false);
+        this.showContextPaneForSplitView(win);
       }
-    }, 1000); // Reduced frequency
+    }, 1000);
 
-    // Store interval for cleanup
     (this.state as any)._visibilityInterval = checkInterval;
-
-    ztoolkit.log("SplitView: Context pane setup complete");
   }
 
   private static cleanup() {
