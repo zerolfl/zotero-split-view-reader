@@ -1201,6 +1201,7 @@ export class SplitViewFactory {
 
   /**
    * Set up Ctrl key listener on a browser's iframe to detect Ctrl+wheel zoom
+   * and Ctrl+Plus/Minus keyboard shortcuts for zoom sync
    */
   private static setupCtrlKeyListener(browser: XULBrowserElement) {
     if (!this.state) return;
@@ -1223,10 +1224,34 @@ export class SplitViewFactory {
       if (!doc) return;
 
       const self = this;
+      const isLeft = browser === this.state.leftBrowser;
 
       const keydownHandler = (e: KeyboardEvent) => {
-        if (e.key === "Control" && self.state) {
+        if (!self.state) return;
+
+        if (e.key === "Control") {
           self.state.ctrlPressed = true;
+          return;
+        }
+
+        // Handle Ctrl+Plus/Minus for zoom sync (only from primary side)
+        if (e.ctrlKey && self.state.syncEnabled) {
+          const isPrimary = (isLeft && self.state.primarySide === "left") ||
+                            (!isLeft && self.state.primarySide === "right");
+          if (!isPrimary) return;
+
+          // Zoom in: Ctrl+= or Ctrl++ (numpad)
+          const isZoomIn = e.key === "+" || e.key === "=" ||
+                           e.code === "Equal" || e.code === "NumpadAdd";
+          // Zoom out: Ctrl+- or Ctrl+- (numpad)
+          const isZoomOut = e.key === "-" ||
+                            e.code === "Minus" || e.code === "NumpadSubtract";
+
+          if (isZoomIn) {
+            self.handleKeyboardZoom(isLeft, "in");
+          } else if (isZoomOut) {
+            self.handleKeyboardZoom(isLeft, "out");
+          }
         }
       };
       this.trackEventListener(doc, "keydown", keydownHandler as EventListener);
@@ -1247,6 +1272,38 @@ export class SplitViewFactory {
     } catch {
       // Ignore errors
     }
+  }
+
+  /**
+   * Handle keyboard zoom (Ctrl+Plus/Minus) - sync to secondary
+   */
+  private static handleKeyboardZoom(isLeft: boolean, direction: "in" | "out") {
+    if (!this.state) return;
+    if (!this.state.syncEnabled) return;
+
+    const secondaryBrowser = this.state.primarySide === "left"
+      ? this.state.rightBrowser
+      : this.state.leftBrowser;
+
+    // Pause scroll sync during zoom
+    this.state.zoomingCount++;
+
+    // Sync zoom action to secondary
+    if (direction === "in") {
+      this.zoomInForBrowser(secondaryBrowser);
+    } else {
+      this.zoomOutForBrowser(secondaryBrowser);
+    }
+
+    // Resume scroll sync after zoom completes
+    this.trackTimeout(() => {
+      if (this.state) {
+        this.state.zoomingCount = Math.max(0, this.state.zoomingCount - 1);
+        if (this.state.zoomingCount === 0) {
+          this.initSyncState();
+        }
+      }
+    }, 150);
   }
 
   /**
