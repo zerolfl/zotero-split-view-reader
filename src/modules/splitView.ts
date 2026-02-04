@@ -551,6 +551,10 @@ export class SplitViewFactory {
           this.initSyncState();
           this.startSyncPolling();
 
+          // Set up resize listener to pause sync during window resize
+          // (e.g., when context pane expands/collapses)
+          this.setupResizeListener(win);
+
           // Set up Ctrl key listeners for detecting Ctrl+wheel zoom
           this.setupCtrlKeyListener(leftBrowser);
           this.setupCtrlKeyListener(rightBrowser);
@@ -1243,6 +1247,41 @@ export class SplitViewFactory {
     } catch {
       // Ignore errors
     }
+  }
+
+  /**
+   * Set up resize listener to pause scroll sync during window resize
+   * This prevents false scroll sync when context pane expands/collapses
+   */
+  private static setupResizeListener(win: Window) {
+    if (!this.state) return;
+
+    const self = this;
+    let resizeTimer: number | null = null;
+
+    const resizeHandler = () => {
+      if (!self.state) return;
+
+      // Pause sync during resize
+      self.state.syncPaused = true;
+
+      // Clear any existing timer
+      if (resizeTimer !== null) {
+        win.clearTimeout(resizeTimer);
+      }
+
+      // Resume sync after resize settles and reinitialize sync state
+      resizeTimer = win.setTimeout(() => {
+        if (self.state) {
+          // Reinitialize sync state with new positions after resize
+          self.initSyncState();
+          self.state.syncPaused = false;
+        }
+        resizeTimer = null;
+      }, 200);
+    };
+
+    this.trackEventListener(win, "resize", resizeHandler as EventListener);
   }
 
   /**
