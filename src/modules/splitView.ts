@@ -1308,11 +1308,20 @@ export class SplitViewFactory {
    */
   private static async closeReaderWithoutClosingTab(reader: any): Promise<void> {
     try {
-      // 1. Call uninit() to clean up reader (flush state to disk, unregister listeners)
+      // 1. First unload the reader's iframe to prevent dead object errors
+      // ReaderTab has an _iframe property that contains the browser element
+      if (reader._iframe) {
+        this.unloadBrowser(reader._iframe);
+        // Wait a bit for pending callbacks to complete
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // 2. Call uninit() to clean up reader (flush state to disk, unregister listeners)
       if (typeof reader.uninit === "function") {
         reader.uninit();
       }
-      // 2. Remove from Zotero.Reader._readers array
+
+      // 3. Remove from Zotero.Reader._readers array
       const readers = (Zotero.Reader as any)._readers;
       const index = readers.indexOf(reader);
       if (index !== -1) {
