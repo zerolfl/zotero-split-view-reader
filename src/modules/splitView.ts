@@ -1208,11 +1208,91 @@ export class SplitViewFactory {
   }
 
   /**
+   * Uninitialize the internal reader to prevent callbacks from firing
+   * This nulls out the reader's callbacks and disconnects observers
+   */
+  private static uninitInternalReader(browser: XULBrowserElement): void {
+    try {
+      if (!this.isBrowserAlive(browser)) return;
+
+      const internalReader = this.getInternalReaderFromBrowser(browser);
+      if (!internalReader) return;
+
+      // Null out all callbacks to prevent them from firing
+      const callbackNames = [
+        'onOpenContextMenu', 'onToggleSidebar', 'onChangeSidebarWidth',
+        'onChangeViewState', 'onSaveAnnotations', 'onDeleteAnnotations',
+        'onAddToNote', 'onOpenTagsPopup', 'onClosePopup', 'onOpenLink',
+        'onCopyImage', 'onSaveImageAs', 'onSetDataTransferAnnotations',
+        'onToggleContextPane'
+      ];
+      for (const name of callbackNames) {
+        try {
+          if (internalReader[name]) {
+            internalReader[name] = () => {};
+          }
+        } catch { /* Ignore */ }
+      }
+
+      // Try to disconnect any observers on the internal reader
+      try {
+        if (internalReader._resizeObserver) {
+          internalReader._resizeObserver.disconnect();
+          internalReader._resizeObserver = null;
+        }
+      } catch { /* Ignore */ }
+
+      try {
+        if (internalReader._mutationObserver) {
+          internalReader._mutationObserver.disconnect();
+          internalReader._mutationObserver = null;
+        }
+      } catch { /* Ignore */ }
+
+      // Also clean up the primaryView which might have its own observers
+      try {
+        const primaryView = internalReader._primaryView;
+        if (primaryView) {
+          if (primaryView._resizeObserver) {
+            primaryView._resizeObserver.disconnect();
+            primaryView._resizeObserver = null;
+          }
+          if (primaryView._mutationObserver) {
+            primaryView._mutationObserver.disconnect();
+            primaryView._mutationObserver = null;
+          }
+          // Disconnect intersection observer if any
+          if (primaryView._intersectionObserver) {
+            primaryView._intersectionObserver.disconnect();
+            primaryView._intersectionObserver = null;
+          }
+        }
+      } catch { /* Ignore */ }
+
+      // Try to unset the internal reader reference
+      try {
+        const win = browser.contentWindow;
+        if (win) {
+          const wrappedWin = (win as any).wrappedJSObject || win;
+          wrappedWin._reader = null;
+        }
+      } catch { /* Ignore */ }
+
+    } catch {
+      // Ignore errors
+    }
+  }
+
+  /**
    * Unload browser content to prevent dead object errors
-   * Sets src to about:blank to force iframe unload
+   * First uninitializes the internal reader, then sets src to about:blank
    */
   private static unloadBrowser(browser: XULBrowserElement): void {
     try {
+      // First uninitialize the internal reader to stop callbacks
+      this.uninitInternalReader(browser);
+
+      // Then unload the browser content
       if (this.isBrowserAlive(browser)) {
         browser.setAttribute("src", "about:blank");
       }
