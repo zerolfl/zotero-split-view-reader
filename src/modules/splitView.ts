@@ -94,8 +94,8 @@ export class SplitViewFactory {
     browser.setAttribute("transparent", "true");
     browser.setAttribute("src", "resource://zotero/reader/reader.html");
     // Initial flex: equal distribution, will be updated by updateBrowserFlex
-    // Use flex-basis: 0 to ensure proportional sizing regardless of content
-    (browser as any).style.flex = "1 1 0%";
+    // Use flex-basis: 0 (not 0%) to ensure proportional sizing regardless of content
+    (browser as any).style.flex = "1 1 0";
     (browser as any).style.minWidth = "200px";
     (browser as any).style.maxWidth = "none";
     (browser as any).style.overflow = "hidden";
@@ -112,13 +112,13 @@ export class SplitViewFactory {
     rightBrowser: XULBrowserElement,
     splitRatio: number
   ) {
-    // Use flex-grow to control proportions (flex-shrink=1, flex-basis=0%)
-    // flex-basis: 0% ensures both browsers start at 0 and grow proportionally
-    // This guarantees equal width when splitRatio is 0.5
-    const leftFlex = splitRatio * 100;
-    const rightFlex = (1 - splitRatio) * 100;
-    (leftBrowser as any).style.flex = `${leftFlex} 1 0%`;
-    (rightBrowser as any).style.flex = `${rightFlex} 1 0%`;
+    // Use flex-grow to control proportions (flex-shrink=1, flex-basis=0)
+    // flex-basis: 0 (not 0%) ensures both browsers start at exactly 0 and grow proportionally
+    // Using integer flex-grow values to avoid floating point issues
+    const leftFlex = Math.round(splitRatio * 1000);
+    const rightFlex = Math.round((1 - splitRatio) * 1000);
+    (leftBrowser as any).style.flex = `${leftFlex} 1 0`;
+    (rightBrowser as any).style.flex = `${rightFlex} 1 0`;
   }
 
   /**
@@ -466,16 +466,19 @@ export class SplitViewFactory {
     // 4. Close current reader (but don't close tab)
     await this.closeReaderWithoutClosingTab(currentReader);
 
-    // 5. Clear tab container and reset its styles
-    while (container.firstChild) {
-      container.removeChild(container.firstChild);
-    }
+    // 5. Replace tab container to remove old event listeners
+    // The old ReaderTab added event listeners for tab-bottom-placeholder-resize,
+    // tab-context-pane-toggle, and tab-selection-change that reference the dead reader.
+    // Cloning without events removes these stale listeners.
+    const newContainer = container.cloneNode(false) as HTMLElement;
+    container.parentNode?.replaceChild(newContainer, container);
+
     // Reset container styles to ensure proper flex layout
-    (container as any).style.display = "flex";
-    (container as any).style.flexDirection = "row";
-    (container as any).style.width = "100%";
-    (container as any).style.height = "100%";
-    (container as any).style.overflow = "hidden";
+    (newContainer as any).style.display = "flex";
+    (newContainer as any).style.flexDirection = "row";
+    (newContainer as any).style.width = "100%";
+    (newContainer as any).style.height = "100%";
+    (newContainer as any).style.overflow = "hidden";
 
     // 6. Get item info for tab title
     const leftTitle = String(leftItem.getField("title") || "PDF 1").substring(0, 30);
@@ -516,13 +519,49 @@ export class SplitViewFactory {
     mainHbox.appendChild(leftBrowser);
     mainHbox.appendChild(resizer);
     mainHbox.appendChild(rightBrowser);
-    container.appendChild(mainHbox);
-    container.appendChild(leftPopupset);
-    container.appendChild(rightPopupset);
+    newContainer.appendChild(mainHbox);
+    newContainer.appendChild(leftPopupset);
+    newContainer.appendChild(rightPopupset);
 
-    // Handle bottom placeholder resize events
-    container.addEventListener("tab-bottom-placeholder-resize", (event: any) => {
-      event.stopPropagation();
+    // Set up event listeners for tab content events (replacing the dead reader's listeners)
+    const self = this;
+
+    // Handle bottom placeholder resize - forward to both readers
+    newContainer.addEventListener("tab-bottom-placeholder-resize", (event: any) => {
+      if (!self.state || self.state.isCleaningUp) return;
+      const height = event.detail?.height ?? 0;
+      try {
+        const leftReader = self.getInternalReaderFromBrowser(self.state.leftBrowser);
+        const rightReader = self.getInternalReaderFromBrowser(self.state.rightBrowser);
+        if (leftReader?.setBottomPlaceholderHeight) {
+          leftReader.setBottomPlaceholderHeight(height);
+        }
+        if (rightReader?.setBottomPlaceholderHeight) {
+          rightReader.setBottomPlaceholderHeight(height);
+        }
+      } catch {
+        // Ignore errors - readers may not be ready
+      }
+    });
+
+    // Handle context pane toggle - forward to right reader (which shows the toggle button)
+    newContainer.addEventListener("tab-context-pane-toggle", (event: any) => {
+      if (!self.state || self.state.isCleaningUp) return;
+      const open = event.detail?.open ?? false;
+      try {
+        const rightReader = self.getInternalReaderFromBrowser(self.state.rightBrowser);
+        if (rightReader?.setContextPaneOpen) {
+          rightReader.setContextPaneOpen(open);
+        }
+      } catch {
+        // Ignore errors - reader may not be ready
+      }
+    });
+
+    // Handle tab selection change
+    newContainer.addEventListener("tab-selection-change", (event: any) => {
+      if (!self.state || self.state.isCleaningUp) return;
+      // No special handling needed for split view
     });
 
     // Get parent item IDs for context pane switching
@@ -532,7 +571,7 @@ export class SplitViewFactory {
     // 8. Initialize state (reuse current tabID)
     this.state = {
       tabID,
-      container: container as XUL.Box,
+      container: newContainer as unknown as XUL.Box,
       leftBrowser,
       rightBrowser,
       leftPopupset,
@@ -1001,29 +1040,23 @@ export class SplitViewFactory {
       sidebarView: Zotero.Prefs.get("reader.lastSidebarTab"),
       // Pass viewState to restore position
       primaryViewState: viewState,
-      // Required callbacks - all callbacks check if browser is still alive
+      // Required callbacks - defined as regular functions
       onOpenContextMenu: () => {
-        if (!self.state || self.state.isCleaningUp || !self.isBrowserAlive(browserRef)) return;
-        try {
-          const params = wrappedWin.contextMenuParams;
-          if (params) {
-            self.openContextMenu(browserRef, popupsetRef, params);
-          }
-        } catch { /* Ignore dead object errors */ }
+        const params = wrappedWin.contextMenuParams;
+        if (params) {
+          self.openContextMenu(browserRef, popupsetRef, params);
+        }
       },
       onToggleSidebar: (open: boolean) => {
-        if (!self.state || self.state.isCleaningUp || !self.isBrowserAlive(browserRef)) return;
-        try {
-          self.handleSidebarToggle(browserRef, open);
-        } catch { /* Ignore dead object errors */ }
+        // Sync sidebar toggle when sync is enabled
+        self.handleSidebarToggle(browserRef, open);
       },
       onChangeSidebarWidth: (_width: number) => {
         // No-op for split view
       },
       onChangeViewState: (viewState: any, _primary: boolean) => {
-        if (!self.state || self.state.isCleaningUp || !self.isBrowserAlive(browserRef)) return;
-        try {
-          // Track view state for saving to disk later
+        // Track view state for saving to disk later
+        if (self.state && !self.state.isCleaningUp) {
           const isLeft = browserRef === self.state.leftBrowser;
           const stateCopy = JSON.parse(JSON.stringify(viewState));
           if (isLeft) {
@@ -1031,20 +1064,16 @@ export class SplitViewFactory {
           } else {
             self.state.rightViewState = stateCopy;
           }
-          // Sync zoom when scale changes (toolbar zoom in/out)
-          self.handleViewStateChange(browserRef, viewState);
-        } catch { /* Ignore dead object errors */ }
+        }
+        // Sync zoom when scale changes (toolbar zoom in/out)
+        self.handleViewStateChange(browserRef, viewState);
       },
       onSaveAnnotations: async (annotations: any[], callback: () => void) => {
-        try {
-          await self.handleAnnotationSave(itemRef, annotations);
-          if (callback) callback();
-        } catch { /* Ignore errors */ }
+        await self.handleAnnotationSave(itemRef, annotations);
+        if (callback) callback();
       },
       onDeleteAnnotations: (ids: string[]) => {
-        try {
-          self.handleAnnotationDelete(itemRef, ids);
-        } catch { /* Ignore errors */ }
+        self.handleAnnotationDelete(itemRef, ids);
       },
       onAddToNote: (_annotations: any[]) => {
         // No-op for split view
@@ -1056,9 +1085,7 @@ export class SplitViewFactory {
         // No-op
       },
       onOpenLink: (url: string) => {
-        try {
-          Zotero.launchURL(url);
-        } catch { /* Ignore errors */ }
+        Zotero.launchURL(url);
       },
       onCopyImage: (_dataURL: string) => {
         // Image copy not implemented for split view
@@ -1070,22 +1097,19 @@ export class SplitViewFactory {
         // Drag-drop not implemented for split view
       },
       onToggleContextPane: () => {
-        if (!self.state || self.state.isCleaningUp) return;
-        try {
-          // Toggle global context pane
-          const mainWin = Zotero.getMainWindow();
-          if ((mainWin as any).ZoteroContextPane) {
-            (mainWin as any).ZoteroContextPane.togglePane();
-            // Update right reader's contextPaneOpen state after toggle
-            // This controls whether the toggle button shows in the toolbar
-            setTimeout(() => {
-              if (self.state && !self.state.isCleaningUp && self.isBrowserAlive(self.state.rightBrowser)) {
-                const isOpen = !((mainWin as any).ZoteroContextPane?.collapsed ?? true);
-                self.setContextPaneOpenForBrowser(self.state.rightBrowser, isOpen);
-              }
-            }, 50);
-          }
-        } catch { /* Ignore dead object errors */ }
+        // Toggle global context pane
+        const mainWin = Zotero.getMainWindow();
+        if ((mainWin as any).ZoteroContextPane) {
+          (mainWin as any).ZoteroContextPane.togglePane();
+          // Update right reader's contextPaneOpen state after toggle
+          // This controls whether the toggle button shows in the toolbar
+          setTimeout(() => {
+            if (self.state?.rightBrowser) {
+              const isOpen = !((mainWin as any).ZoteroContextPane?.collapsed ?? true);
+              self.setContextPaneOpenForBrowser(self.state.rightBrowser, isOpen);
+            }
+          }, 50);
+        }
       },
     };
 
@@ -1194,134 +1218,17 @@ export class SplitViewFactory {
   }
 
   /**
-   * Check if a browser element is still alive (not destroyed)
-   */
-  private static isBrowserAlive(browser: XULBrowserElement | null): boolean {
-    if (!browser) return false;
-    try {
-      // Try to access a property - if it throws, the browser is dead
-      const win = browser.contentWindow;
-      return win !== null;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Uninitialize the internal reader to prevent callbacks from firing
-   * This nulls out the reader's callbacks and disconnects observers
-   */
-  private static uninitInternalReader(browser: XULBrowserElement): void {
-    try {
-      if (!this.isBrowserAlive(browser)) return;
-
-      const internalReader = this.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return;
-
-      // Null out all callbacks to prevent them from firing
-      const callbackNames = [
-        'onOpenContextMenu', 'onToggleSidebar', 'onChangeSidebarWidth',
-        'onChangeViewState', 'onSaveAnnotations', 'onDeleteAnnotations',
-        'onAddToNote', 'onOpenTagsPopup', 'onClosePopup', 'onOpenLink',
-        'onCopyImage', 'onSaveImageAs', 'onSetDataTransferAnnotations',
-        'onToggleContextPane'
-      ];
-      for (const name of callbackNames) {
-        try {
-          if (internalReader[name]) {
-            internalReader[name] = () => {};
-          }
-        } catch { /* Ignore */ }
-      }
-
-      // Try to disconnect any observers on the internal reader
-      try {
-        if (internalReader._resizeObserver) {
-          internalReader._resizeObserver.disconnect();
-          internalReader._resizeObserver = null;
-        }
-      } catch { /* Ignore */ }
-
-      try {
-        if (internalReader._mutationObserver) {
-          internalReader._mutationObserver.disconnect();
-          internalReader._mutationObserver = null;
-        }
-      } catch { /* Ignore */ }
-
-      // Also clean up the primaryView which might have its own observers
-      try {
-        const primaryView = internalReader._primaryView;
-        if (primaryView) {
-          if (primaryView._resizeObserver) {
-            primaryView._resizeObserver.disconnect();
-            primaryView._resizeObserver = null;
-          }
-          if (primaryView._mutationObserver) {
-            primaryView._mutationObserver.disconnect();
-            primaryView._mutationObserver = null;
-          }
-          // Disconnect intersection observer if any
-          if (primaryView._intersectionObserver) {
-            primaryView._intersectionObserver.disconnect();
-            primaryView._intersectionObserver = null;
-          }
-        }
-      } catch { /* Ignore */ }
-
-      // Try to unset the internal reader reference
-      try {
-        const win = browser.contentWindow;
-        if (win) {
-          const wrappedWin = (win as any).wrappedJSObject || win;
-          wrappedWin._reader = null;
-        }
-      } catch { /* Ignore */ }
-
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  /**
-   * Unload browser content to prevent dead object errors
-   * First uninitializes the internal reader, then sets src to about:blank
-   */
-  private static unloadBrowser(browser: XULBrowserElement): void {
-    try {
-      // First uninitialize the internal reader to stop callbacks
-      this.uninitInternalReader(browser);
-
-      // Then unload the browser content
-      if (this.isBrowserAlive(browser)) {
-        browser.setAttribute("src", "about:blank");
-      }
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  /**
    * Close a Zotero reader without closing its tab
    * Cleans up the reader (flushes state to disk, unregisters listeners)
    * and removes it from Zotero.Reader._readers array
    */
   private static async closeReaderWithoutClosingTab(reader: any): Promise<void> {
     try {
-      // 1. First unload the reader's iframe to prevent dead object errors
-      // ReaderTab has an _iframe property that contains the browser element
-      if (reader._iframe) {
-        this.unloadBrowser(reader._iframe);
-        // Wait a bit for pending callbacks to complete
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-
-      // 2. Call uninit() to clean up reader (flush state to disk, unregister listeners)
+      // 1. Call uninit() to clean up reader (flush state to disk, unregister listeners)
       if (typeof reader.uninit === "function") {
         reader.uninit();
       }
-
-      // 3. Remove from Zotero.Reader._readers array
+      // 2. Remove from Zotero.Reader._readers array
       const readers = (Zotero.Reader as any)._readers;
       const index = readers.indexOf(reader);
       if (index !== -1) {
@@ -1419,9 +1326,6 @@ export class SplitViewFactory {
     popupset: XULElement,
     params: { x: number; y: number; itemGroups: any[][] }
   ) {
-    if (!this.isBrowserAlive(browser)) return;
-    if (!this.state || this.state.isCleaningUp) return;
-
     const mainWindow = Zotero.getMainWindow();
     const { x, y, itemGroups } = params;
 
@@ -1683,13 +1587,6 @@ export class SplitViewFactory {
     // Mark as cleaning up to prevent further operations
     this.state.isCleaningUp = true;
 
-    // Unload browsers FIRST to prevent dead object errors from callbacks
-    // This stops the internal readers from firing more callbacks
-    const leftBrowser = this.state.leftBrowser;
-    const rightBrowser = this.state.rightBrowser;
-    this.unloadBrowser(leftBrowser);
-    this.unloadBrowser(rightBrowser);
-
     // Store references before nulling state
     const eventListeners = [...this.state.eventListeners];
     const timeoutIds = [...this.state.timeoutIds];
@@ -1909,7 +1806,6 @@ export class SplitViewFactory {
    * Call zoomIn on a browser's internal reader
    */
   private static zoomInForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomIn === "function") {
@@ -1924,7 +1820,6 @@ export class SplitViewFactory {
    * Call zoomOut on a browser's internal reader
    */
   private static zoomOutForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomOut === "function") {
@@ -1939,7 +1834,6 @@ export class SplitViewFactory {
    * Call zoomReset on a browser's internal reader
    */
   private static zoomResetForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomReset === "function") {
@@ -1955,7 +1849,6 @@ export class SplitViewFactory {
    * This controls whether the toggle button shows in the toolbar
    */
   private static setContextPaneOpenForBrowser(browser: XULBrowserElement, open: boolean) {
-    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.setContextPaneOpen === "function") {
@@ -1971,7 +1864,7 @@ export class SplitViewFactory {
    * When context pane is toggled via sidenav, update right reader's toggle button visibility
    */
   private static setupContextPaneObserver(win: Window) {
-    if (!this.state || this.state.isCleaningUp) return;
+    if (!this.state) return;
 
     try {
       const contextPane = win.document.getElementById("zotero-context-pane");
@@ -1979,17 +1872,11 @@ export class SplitViewFactory {
 
       const self = this;
       const observer = new win.MutationObserver((mutations: MutationRecord[]) => {
-        // Check state validity in callback
-        if (!self.state || self.state.isCleaningUp) return;
-        if (!self.isBrowserAlive(self.state.rightBrowser)) return;
-
         for (const mutation of mutations) {
           if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
-            try {
-              const isOpen = contextPane.getAttribute("collapsed") !== "true";
+            const isOpen = contextPane.getAttribute("collapsed") !== "true";
+            if (self.state?.rightBrowser) {
               self.setContextPaneOpenForBrowser(self.state.rightBrowser, isOpen);
-            } catch {
-              // Ignore dead object errors
             }
           }
         }
@@ -2543,12 +2430,6 @@ export class SplitViewFactory {
       this.saveViewStateToDisk(leftItemID, leftCurrentState || leftViewState),
       this.saveViewStateToDisk(rightItemID, rightCurrentState || rightViewState),
     ]).catch(() => { /* Ignore save errors */ });
-
-    // Unload browsers FIRST to prevent dead object errors from callbacks
-    const leftBrowser = this.state.leftBrowser;
-    const rightBrowser = this.state.rightBrowser;
-    this.unloadBrowser(leftBrowser);
-    this.unloadBrowser(rightBrowser);
 
     // Store references before nulling state
     const eventListeners = [...this.state.eventListeners];
