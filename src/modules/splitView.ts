@@ -424,6 +424,39 @@ export class SplitViewFactory {
   }
 
   /**
+   * Hook into Zotero_Tabs.getTabIDByItemID to support finding tabs by right-side itemID
+   */
+  static registerTabLookup() {
+    const win = Zotero.getMainWindow();
+    const Zotero_Tabs = (win as any).Zotero_Tabs;
+
+    if (!Zotero_Tabs) return;
+
+    // Store original method if not already stored
+    if (!(Zotero_Tabs as any)._originalGetTabIDByItemID) {
+      (Zotero_Tabs as any)._originalGetTabIDByItemID = Zotero_Tabs.getTabIDByItemID;
+    }
+
+    const self = this;
+
+    // Override method
+    Zotero_Tabs.getTabIDByItemID = function(itemID: number) {
+      // 1. Try original method first
+      const tabID = this._originalGetTabIDByItemID.call(this, itemID);
+      if (tabID) return tabID;
+
+      // 2. If not found, check our split view states for right-side items
+      for (const state of self.stateMap.values()) {
+        if (state.rightItemID === itemID && !state.isCleaningUp) {
+          return state.tabID;
+        }
+      }
+
+      return null;
+    };
+  }
+
+  /**
    * Register session restore handler to restore split view tabs after Zotero restart.
    * This should be called once during plugin initialization.
    */
@@ -2071,18 +2104,38 @@ export class SplitViewFactory {
    */
   private static async closeReaderWithoutClosingTab(reader: any): Promise<void> {
     try {
-      // 1. Clear internal references FIRST, before unloading the browser
-      // The Proxy in ReaderInstance tries to access _internalReader when setting properties,
-      // which becomes a dead object after the iframe is unloaded.
-      // We must null these while they are still accessible.
-      try {
-        reader._internalReader = null;
-        reader._iframeWindow = null;
-      } catch {
-        // Ignore - may already be inaccessible
+      const win = reader._window;
+
+      // 1. Remove window-level event listeners FIRST
+      // ReaderTab registers pointerdown/pointerup handlers that access _internalReader
+      // and event.target.ownerDocument. These must be removed before clearing references.
+      if (win) {
+        try {
+          if (reader._handleLoad) {
+            win.removeEventListener("DOMContentLoaded", reader._handleLoad);
+          }
+          if (reader._handlePointerDown) {
+            win.removeEventListener("pointerdown", reader._handlePointerDown);
+          }
+          if (reader._handlePointerUp) {
+            win.removeEventListener("pointerup", reader._handlePointerUp);
+          }
+        } catch {
+          // Ignore - window may be dead
+        }
       }
 
-      // 2. Now unload the reader's iframe
+      // 2. Call uninit() to flush state to disk and clean up observers
+      // Must be called BEFORE clearing internal references so state can be saved
+      if (typeof reader.uninit === "function") {
+        try {
+          reader.uninit();
+        } catch {
+          // Ignore errors during uninit
+        }
+      }
+
+      // 3. Now unload the reader's iframe
       // ReaderTab has an _iframe property that contains the browser element
       if (reader._iframe) {
         this.unloadBrowser(reader._iframe);
@@ -2090,12 +2143,16 @@ export class SplitViewFactory {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      // 3. Call uninit() to clean up reader (flush state to disk, unregister listeners)
-      if (typeof reader.uninit === "function") {
-        reader.uninit();
+      // 4. Clear internal references AFTER uninit and unload
+      // This prevents further accidental access
+      try {
+        reader._internalReader = null;
+        reader._iframeWindow = null;
+      } catch {
+        // Ignore - may already be inaccessible
       }
 
-      // 4. Remove from Zotero.Reader._readers array
+      // 5. Remove from Zotero.Reader._readers array
       const readers = (Zotero.Reader as any)._readers;
       const index = readers.indexOf(reader);
       if (index !== -1) {

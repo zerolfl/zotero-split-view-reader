@@ -21,6 +21,7 @@ async function onStartup() {
 
   SplitViewFactory.registerContextMenu();
   SplitViewFactory.registerSessionRestore();
+  SplitViewFactory.registerTabLookup();
 
   BasicExampleFactory.registerPrefs();
 
