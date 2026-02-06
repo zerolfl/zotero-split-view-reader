@@ -33,7 +33,6 @@ interface SplitTabState {
   activeSide: "left" | "right";
   scrollHandler: (() => void) | null;
   lastPrimaryScroll: { top: number; left: number } | null;
-  notifierID: string | null;
   syncPaused: boolean;
   sidebarToggleTimers: number[];
   ctrlPressed: boolean;
@@ -51,6 +50,8 @@ interface SplitTabState {
   // Track view states for saving to disk
   leftViewState: any;
   rightViewState: any;
+  // Original tab title before enabling split view (for future extensions)
+  originalTitle?: string;
   // Track if cleanup is in progress to avoid dead object errors
   isCleaningUp: boolean;
   // Same PDF split view specific fields
@@ -63,30 +64,58 @@ interface SplitTabState {
 }
 
 export class SplitViewFactory {
-  private static state: SplitTabState | null = null;
+  /** Per-tab split view states. Each tab can independently have its own split view. */
+  private static stateMap: Map<string, SplitTabState> = new Map();
+  /** Global tab notifier ID - shared across all split view tabs */
+  private static globalTabNotifierID: string | null = null;
+  /** Session restore notifier ID - for detecting tabs that need split view restoration */
+  private static sessionRestoreNotifierID: string | null = null;
+
+  /**
+   * Look up state for a specific tab
+   */
+  private static getState(tabID: string): SplitTabState | null {
+    return this.stateMap.get(tabID) ?? null;
+  }
+
+  /**
+   * Get the state for the currently selected Zotero tab (if it has split view)
+   */
+  private static getActiveTabState(): SplitTabState | null {
+    try {
+      const win = Zotero.getMainWindow();
+      const Zotero_Tabs = (win as any).Zotero_Tabs;
+      const selectedTabID = Zotero_Tabs?.selectedID;
+      if (selectedTabID) {
+        return this.stateMap.get(selectedTabID) ?? null;
+      }
+    } catch {
+      // Ignore errors
+    }
+    return null;
+  }
 
   /**
    * Register an event listener and track it for cleanup
    */
   private static trackEventListener(
+    state: SplitTabState,
     target: EventTarget,
     type: string,
     listener: EventListener,
     options?: boolean | AddEventListenerOptions
   ) {
-    if (!this.state) return;
     target.addEventListener(type, listener, options);
-    this.state.eventListeners.push({ target, type, listener, options });
+    state.eventListeners.push({ target, type, listener, options });
   }
 
   /**
    * Register a timeout and track it for cleanup
    */
-  private static trackTimeout(callback: () => void, delay: number): number {
-    if (!this.state) return 0;
+  private static trackTimeout(state: SplitTabState, callback: () => void, delay: number): number {
     const win = Zotero.getMainWindow();
     const id = win.setTimeout(callback, delay);
-    this.state.timeoutIds.push(id);
+    state.timeoutIds.push(id);
     return id;
   }
 
@@ -135,12 +164,16 @@ export class SplitViewFactory {
    * - PDF scale is preserved (PDF.js handles relative vs absolute scaling)
    */
   private static setupResizerDrag(
+    tabID: string,
     resizer: XULElement | HTMLElement,
     leftBrowser: XULBrowserElement,
     rightBrowser: XULBrowserElement,
     mainHbox: XULElement,
     win: Window
   ) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
+
     let isDragging = false;
     let startX = 0;
     let startRatio = 0;
@@ -205,8 +238,9 @@ export class SplitViewFactory {
       onKeyDown = (e: KeyboardEvent) => {
         if (e.key === "Escape") {
           // Restore original ratio
-          if (self.state) {
-            self.state.splitRatio = startRatio;
+          const s = self.stateMap.get(tabID);
+          if (s) {
+            s.splitRatio = startRatio;
             self.updateBrowserFlex(leftBrowser, rightBrowser, startRatio);
           }
           removeOverlay();
@@ -219,7 +253,8 @@ export class SplitViewFactory {
       isDragging = true;
       startX = e.clientX;
       // Store the starting ratio for Escape key restoration
-      startRatio = self.state?.splitRatio ?? 0.5;
+      const s = self.stateMap.get(tabID);
+      startRatio = s?.splitRatio ?? 0.5;
 
       createOverlay();
       e.preventDefault();
@@ -228,7 +263,8 @@ export class SplitViewFactory {
 
     const onWindowMouseDown = (e: MouseEvent) => {
       if (isDragging) return;
-      if (!self.state) return;
+      const s = self.stateMap.get(tabID);
+      if (!s) return;
 
       // Only handle when our tab is visible (resizer has non-zero dimensions)
       const resizerRect = resizer.getBoundingClientRect();
@@ -247,13 +283,15 @@ export class SplitViewFactory {
     };
 
     const onMouseMove = (e: MouseEvent) => {
-      if (!isDragging || !self.state) return;
+      const s = self.stateMap.get(tabID);
+      if (!isDragging || !s) return;
       if (rafPending) return;
 
       rafPending = true;
       win.requestAnimationFrame(() => {
         rafPending = false;
-        if (!isDragging || !self.state) return;
+        const s2 = self.stateMap.get(tabID);
+        if (!isDragging || !s2) return;
 
         // Use real-time container width instead of cached start widths
         // This ensures correct ratio calculation even if window is resized during drag
@@ -276,37 +314,41 @@ export class SplitViewFactory {
         percent = Math.max(minPercent, Math.min(maxPercent, percent));
 
         // Update split ratio and flex values
-        self.state.splitRatio = percent / 100;
-        self.updateBrowserFlex(leftBrowser, rightBrowser, self.state.splitRatio);
+        s2.splitRatio = percent / 100;
+        self.updateBrowserFlex(leftBrowser, rightBrowser, s2.splitRatio);
       });
     };
 
     const onMouseUp = () => {
+      // Save the new split ratio to tab data for session restore
+      const s = self.stateMap.get(tabID);
+      if (s && !s.isCleaningUp) {
+        self.updateTabDataForSession(tabID);
+      }
       removeOverlay();
     };
 
     // Track resizer mousedown listener for proper cleanup
     resizer.addEventListener("mousedown", onMouseDown);
-    if (this.state) {
-      this.state.eventListeners.push({
-        target: resizer,
-        type: "mousedown",
-        listener: onMouseDown as EventListener,
-        options: undefined
-      });
-    }
+    state.eventListeners.push({
+      target: resizer,
+      type: "mousedown",
+      listener: onMouseDown as EventListener,
+      options: undefined
+    });
 
-    this.trackEventListener(win, "mousedown", onWindowMouseDown as EventListener, true);
+    this.trackEventListener(state, win, "mousedown", onWindowMouseDown as EventListener, true);
   }
 
   /**
    * Cache viewer container references to avoid repeated DOM queries during scroll sync
    */
-  private static cacheViewerContainers() {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static cacheViewerContainers(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
     try {
-      this.state.leftViewerContainer = this.getViewerContainerFromBrowser(this.state.leftBrowser);
-      this.state.rightViewerContainer = this.getViewerContainerFromBrowser(this.state.rightBrowser);
+      state.leftViewerContainer = this.getViewerContainerFromBrowser(state.leftBrowser);
+      state.rightViewerContainer = this.getViewerContainerFromBrowser(state.rightBrowser);
     } catch (e) {
       Zotero.debug(`Split view: cacheViewerContainers error (browsers may be dead): ${e}`);
     }
@@ -318,9 +360,11 @@ export class SplitViewFactory {
       "createViewContextMenu",
       (event) => {
         const { reader, append } = event;
+        const readerTabID = reader.tabID;
 
-        // Check if we have an active split view (and not cleaning up)
-        const isInSplitView = this.state !== null && !this.state.isCleaningUp;
+        // Check if THIS tab has an active split view (not cleaning up)
+        const tabState = this.stateMap.get(readerTabID);
+        const isInSplitView = !!tabState && !tabState.isCleaningUp;
 
         const menuItems: any[] = [];
 
@@ -330,10 +374,11 @@ export class SplitViewFactory {
           checked: isInSplitView,
           onCommand: () => {
             // Re-check state at command time to avoid stale references
-            const currentlyInSplitView = this.state !== null && !this.state.isCleaningUp;
+            const currentTabState = this.stateMap.get(readerTabID);
+            const currentlyInSplitView = !!currentTabState && !currentTabState.isCleaningUp;
             if (currentlyInSplitView) {
               // Uncheck = close split view, keep the focused reader
-              this.revertToSingleReader();
+              this.revertToSingleReader(readerTabID);
             } else {
               // Check = open split view
               this.handleSplitView(reader);
@@ -342,29 +387,31 @@ export class SplitViewFactory {
         });
 
         // If we have an active split view, add additional options
-        if (isInSplitView && this.state) {
+        if (isInSplitView && tabState) {
           // Determine which side this reader is on
-          const currentSide = this.getReaderSide(reader as any);
+          const currentSide = this.getReaderSide(readerTabID, reader as any);
 
           // Second item: "Primary Window" with 📌 if this is primary
-          const isPrimary = currentSide && this.state.primarySide === currentSide;
+          const isPrimary = currentSide && tabState.primarySide === currentSide;
           menuItems.push({
             label: (isPrimary ? "📌 " : "") + getString("splitview-set-primary"),
             onCommand: () => {
               // Re-check state at command time
-              if (this.state && !this.state.isCleaningUp && currentSide) {
-                this.setPrimarySide(currentSide);
+              const s = this.stateMap.get(readerTabID);
+              if (s && !s.isCleaningUp && currentSide) {
+                this.setPrimarySide(readerTabID, currentSide);
               }
             },
           });
 
           // Third item: "Scroll Sync" with 📌 if enabled
           menuItems.push({
-            label: (this.state.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"),
+            label: (tabState.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"),
             onCommand: () => {
               // Re-check state at command time
-              if (this.state && !this.state.isCleaningUp) {
-                this.toggleSync();
+              const s = this.stateMap.get(readerTabID);
+              if (s && !s.isCleaningUp) {
+                this.toggleSync(readerTabID);
               }
             },
           });
@@ -377,16 +424,190 @@ export class SplitViewFactory {
   }
 
   /**
-   * Determine which side (left/right) a reader belongs to based on itemID
+   * Register session restore handler to restore split view tabs after Zotero restart.
+   * This should be called once during plugin initialization.
    */
-  private static getReaderSide(reader: any): "left" | "right" | null {
-    if (!this.state) return null;
+  static registerSessionRestore() {
+    // Already registered
+    if (this.sessionRestoreNotifierID) return;
+
+    const self = this;
+
+    const notifierCallback = {
+      notify: async (action: string, type: string, ids: (string | number)[], extraData: any) => {
+        if (type !== "tab") return;
+
+        // When a reader tab finishes loading, check if it should be a split view
+        if (action === "load") {
+          const tabID = String(ids[0]);
+          const tabData = extraData?.[tabID];
+
+          // Check if this tab has split view data saved
+          if (tabData?.data?.isSplitView) {
+            // Small delay to ensure the reader is fully initialized
+            setTimeout(async () => {
+              try {
+                await self.restoreSplitViewFromSession(tabID, tabData.data);
+              } catch (e) {
+                Zotero.debug(`Split view: Failed to restore split view for tab ${tabID}: ${e}`);
+              }
+            }, 500);
+          }
+        }
+      },
+    };
+
+    this.sessionRestoreNotifierID = Zotero.Notifier.registerObserver(
+      notifierCallback, ["tab"], "splitViewSessionRestore", 25
+    );
+  }
+
+  /**
+   * Unregister all split view notifiers and cleanup.
+   * This should be called during plugin shutdown.
+   */
+  static unregisterAll() {
+    // Clean up all active split views
+    for (const tabID of this.stateMap.keys()) {
+      try {
+        this.cleanupTabResources(tabID);
+      } catch {
+        // Ignore errors during shutdown
+      }
+    }
+    this.stateMap.clear();
+
+    // Unregister session restore notifier
+    if (this.sessionRestoreNotifierID) {
+      try {
+        Zotero.Notifier.unregisterObserver(this.sessionRestoreNotifierID);
+      } catch {
+        // Ignore errors
+      }
+      this.sessionRestoreNotifierID = null;
+    }
+
+    // Unregister global tab notifier
+    if (this.globalTabNotifierID) {
+      try {
+        Zotero.Notifier.unregisterObserver(this.globalTabNotifierID);
+      } catch {
+        // Ignore errors
+      }
+      this.globalTabNotifierID = null;
+    }
+  }
+
+  /**
+   * Restore split view from saved session data
+   */
+  private static async restoreSplitViewFromSession(tabID: string, savedData: any) {
+    const win = Zotero.getMainWindow();
+    const Zotero_Tabs = (win as any).Zotero_Tabs;
+
+    // Get the reader that was just loaded
+    const reader = Zotero.Reader.getByTabID(tabID);
+    if (!reader) {
+      Zotero.debug(`Split view: Cannot restore - reader not found for tab ${tabID}`);
+      return;
+    }
+
+    // Wait for reader to be fully initialized
+    if (reader._initPromise) {
+      await reader._initPromise;
+    }
+
+    // Check if already converted (e.g., user manually enabled split view)
+    if (this.stateMap.has(tabID)) {
+      Zotero.debug(`Split view: Tab ${tabID} already has split view, skipping restore`);
+      return;
+    }
+
+    const { leftItemID, rightItemID, isSamePDF, splitRatio, syncEnabled } = savedData;
+
+    // Validate items still exist
+    if (!Zotero.Items.exists(leftItemID) || !Zotero.Items.exists(rightItemID)) {
+      Zotero.debug(`Split view: Cannot restore - one or both items no longer exist`);
+      return;
+    }
+
+    const leftItem = Zotero.Items.get(leftItemID);
+    const rightItem = Zotero.Items.get(rightItemID);
+
+    if (!leftItem || !rightItem) {
+      Zotero.debug(`Split view: Cannot restore - failed to get items`);
+      return;
+    }
+
+    Zotero.debug(`Split view: Restoring split view for tab ${tabID} (isSamePDF: ${isSamePDF})`);
+
+    if (isSamePDF) {
+      // Restore same-PDF split view
+      await this.convertToSamePDFSplitView(reader);
+    } else {
+      // Restore different-PDF split view
+      await this.convertToSplitView(reader, rightItem);
+    }
+
+    // Restore saved settings
+    const state = this.stateMap.get(tabID);
+    if (state) {
+      // Restore split ratio
+      if (typeof splitRatio === "number" && splitRatio > 0 && splitRatio < 1) {
+        state.splitRatio = splitRatio;
+        this.updateBrowserFlex(state.leftBrowser, state.rightBrowser, splitRatio);
+      }
+
+      // Restore sync setting
+      if (typeof syncEnabled === "boolean") {
+        state.syncEnabled = syncEnabled;
+        if (!syncEnabled) {
+          this.stopSyncPolling(tabID);
+        }
+      }
+    }
+
+    Zotero.debug(`Split view: Successfully restored split view for tab ${tabID}`);
+  }
+
+  /**
+   * Update tab data with current split view state for session persistence.
+   * Called when split ratio or sync settings change.
+   */
+  private static updateTabDataForSession(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     try {
-      if (reader.itemID === this.state.leftItemID) {
+      const win = Zotero.getMainWindow();
+      const Zotero_Tabs = (win as any).Zotero_Tabs;
+
+      Zotero_Tabs.setTabData(tabID, {
+        itemID: state.leftItemID,
+        leftItemID: state.leftItemID,
+        rightItemID: state.rightItemID,
+        isSplitView: true,
+        isSamePDF: state.isSamePDF,
+        splitRatio: state.splitRatio,
+        syncEnabled: state.syncEnabled,
+      });
+    } catch (e) {
+      Zotero.debug(`Split view: Failed to update tab data: ${e}`);
+    }
+  }
+
+  /**
+   * Determine which side (left/right) a reader belongs to based on itemID
+   */
+  private static getReaderSide(tabID: string, reader: any): "left" | "right" | null {
+    const state = this.stateMap.get(tabID);
+    if (!state) return null;
+
+    try {
+      if (reader.itemID === state.leftItemID) {
         return "left";
       }
-      if (reader.itemID === this.state.rightItemID) {
+      if (reader.itemID === state.rightItemID) {
         return "right";
       }
     } catch (e) {
@@ -400,18 +621,19 @@ export class SplitViewFactory {
   /**
    * Set which side is the primary (controller)
    */
-  private static setPrimarySide(side: "left" | "right") {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static setPrimarySide(tabID: string, side: "left" | "right") {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     // Stop current sync before changing
-    this.stopSyncPolling();
+    this.stopSyncPolling(tabID);
 
-    this.state.primarySide = side;
+    state.primarySide = side;
 
     // Restart sync with new primary
-    if (this.state.syncEnabled) {
-      this.initSyncState();
-      this.startSyncPolling();
+    if (state.syncEnabled) {
+      this.initSyncState(tabID);
+      this.startSyncPolling(tabID);
     }
 
     const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
@@ -426,10 +648,12 @@ export class SplitViewFactory {
   }
 
   private static async handleSplitView(reader: any) {
+    const tabID = reader.tabID;
     try {
-      // Clean up any stale state first
-      if (this.state && !this.state.isCleaningUp) {
-        this.cleanup();
+      // Clean up any stale state for THIS tab only
+      const existingState = this.stateMap.get(tabID);
+      if (existingState && !existingState.isCleaningUp) {
+        this.cleanupTab(tabID);
       }
 
       // Wait a bit for cleanup to complete
@@ -449,8 +673,9 @@ export class SplitViewFactory {
         await this.convertToSplitView(reader, selectedPDF);
       }
     } catch {
-      if (this.state && !this.state.isCleaningUp) {
-        this.cleanup();
+      const s = this.stateMap.get(tabID);
+      if (s && !s.isCleaningUp) {
+        this.cleanupTab(tabID);
       }
     }
   }
@@ -567,11 +792,12 @@ export class SplitViewFactory {
     // null means stackedView=false in reader-ui.js, which is required for the toggle
     // button to correctly hide/show based on contextPaneOpen state.
     newContainer.addEventListener("tab-bottom-placeholder-resize", (event: any) => {
-      if (!self.state || self.state.isCleaningUp) return;
+      const s = self.stateMap.get(tabID);
+      if (!s || s.isCleaningUp) return;
       const height = event.detail?.height !== undefined ? event.detail.height : null;
       try {
-        const leftReader = self.getInternalReaderFromBrowser(self.state.leftBrowser);
-        const rightReader = self.getInternalReaderFromBrowser(self.state.rightBrowser);
+        const leftReader = self.getInternalReaderFromBrowser(s.leftBrowser);
+        const rightReader = self.getInternalReaderFromBrowser(s.rightBrowser);
         if (leftReader?.setBottomPlaceholderHeight) {
           leftReader.setBottomPlaceholderHeight(height);
         }
@@ -587,16 +813,16 @@ export class SplitViewFactory {
     // This event is dispatched by Zotero's contextPane.update() via our restored
     // setContextPaneOpen method on newContainer, keeping toggle button in sync.
     newContainer.addEventListener("tab-context-pane-toggle", (event: any) => {
-      if (!self.state || self.state.isCleaningUp) return;
+      const s = self.stateMap.get(tabID);
+      if (!s || s.isCleaningUp) return;
       const open = event.detail?.open ?? false;
-      if (self.state.rightBrowser) {
-        self.setContextPaneOpenForBrowser(self.state.rightBrowser, open);
+      if (s.rightBrowser) {
+        self.setContextPaneOpenForBrowser(s.rightBrowser, open);
       }
     });
 
     // Handle tab selection change
-    newContainer.addEventListener("tab-selection-change", (event: any) => {
-      if (!self.state || self.state.isCleaningUp) return;
+    newContainer.addEventListener("tab-selection-change", (_event: any) => {
       // No special handling needed for split view
     });
 
@@ -604,8 +830,17 @@ export class SplitViewFactory {
     const leftParentItemID = leftItem.parentItemID || leftItem.id;
     const rightParentItemID = secondaryPDF.parentItemID || secondaryPDF.id;
 
-    // 8. Initialize state (reuse current tabID)
-    this.state = {
+    // 8. Initialize state and store in map (reuse current tabID)
+    //    Capture original tab title before we rename it, for possible future use.
+    let originalTitle: string | undefined;
+    try {
+      const { tab } = Zotero_Tabs._getTab(tabID);
+      originalTitle = tab?.title;
+    } catch {
+      originalTitle = undefined;
+    }
+
+    const newState: SplitTabState = {
       tabID,
       container: newContainer as unknown as XUL.Box,
       leftBrowser,
@@ -621,7 +856,6 @@ export class SplitViewFactory {
       activeSide: "left",
       scrollHandler: null,
       lastPrimaryScroll: null,
-      notifierID: null,
       syncPaused: false,
       sidebarToggleTimers: [],
       ctrlPressed: false,
@@ -641,25 +875,27 @@ export class SplitViewFactory {
       isSyncingSelection: false,
       annotationItemIDs: [],
       scrollSyncRAFPending: false,
+      originalTitle,
     };
+    this.stateMap.set(tabID, newState);
 
     // Set up drag functionality
-    this.setupResizerDrag(resizer, leftBrowser, rightBrowser, mainHbox, win);
+    this.setupResizerDrag(tabID, resizer, leftBrowser, rightBrowser, mainHbox, win);
 
     // Set initial flex values
-    this.updateBrowserFlex(leftBrowser, rightBrowser, this.state.splitRatio);
+    this.updateBrowserFlex(leftBrowser, rightBrowser, newState.splitRatio);
 
-    // Register tab notifier
-    this.registerTabNotifier(win);
+    // Register global tab notifier (if not already registered)
+    this.ensureGlobalTabNotifier(win);
 
     // Set up context pane
-    this.setupContextPane(win);
+    this.setupContextPane(tabID, win);
 
     // 9. Initialize both readers (with viewState)
     try {
       await Promise.all([
-        this.initializeReader(leftBrowser, leftItem, leftPopupset, leftViewState, false),
-        this.initializeReader(rightBrowser, secondaryPDF, rightPopupset, rightViewState, true),
+        this.initializeReader(tabID, leftBrowser, leftItem, leftPopupset, leftViewState, false),
+        this.initializeReader(tabID, rightBrowser, secondaryPDF, rightPopupset, rightViewState, true),
       ]);
 
       // Show success notification
@@ -674,40 +910,47 @@ export class SplitViewFactory {
       popup.startCloseTimer(3000);
 
       // Initialize context pane with left item
-      if (this.state) {
-        this.state.activeSide = "left";
-        this.updateContextPane(win, this.state.leftParentItemID);
+      const curState = this.stateMap.get(tabID);
+      if (curState) {
+        curState.activeSide = "left";
+        this.updateContextPane(tabID, win, curState.leftParentItemID);
       }
 
       // Set up focus listeners
-      this.setupFocusListeners(leftBrowser, rightBrowser, win);
+      this.setupFocusListeners(tabID, leftBrowser, rightBrowser, win);
 
       // Enable sync after delay
-      this.trackTimeout(() => {
-        if (this.state && this.state.syncEnabled) {
-          this.cacheViewerContainers();
-          this.initSyncState();
-          this.startSyncPolling();
-          this.setupResizeListener(win);
-          this.setupCtrlKeyListener(leftBrowser);
-          this.setupCtrlKeyListener(rightBrowser);
-          this.setupMainWindowKeyboardListener(win);
-          this.setupZoomButtonListeners(leftBrowser);
-          this.setupZoomButtonListeners(rightBrowser);
-          this.setupContextPaneObserver(win);
+      this.trackTimeout(newState, () => {
+        const s = this.stateMap.get(tabID);
+        if (s && s.syncEnabled) {
+          this.cacheViewerContainers(tabID);
+          this.initSyncState(tabID);
+          this.startSyncPolling(tabID);
+          this.setupResizeListener(tabID, win);
+          this.setupCtrlKeyListener(tabID, leftBrowser);
+          this.setupCtrlKeyListener(tabID, rightBrowser);
+          this.setupMainWindowKeyboardListener(tabID, win);
+          this.setupZoomButtonListeners(tabID, leftBrowser);
+          this.setupZoomButtonListeners(tabID, rightBrowser);
+          this.setupContextPaneObserver(tabID, win);
         }
       }, 500);
 
-      // 10. Update tab data and title
+      // 10. Update tab data and title (include split view state for session restore)
       Zotero_Tabs.setTabData(tabID, {
         itemID: leftItemID,
         leftItemID,
         rightItemID: secondaryPDF.id,
+        isSplitView: true,
+        isSamePDF: false,
+        splitRatio: newState.splitRatio,
+        syncEnabled: newState.syncEnabled,
       });
-      Zotero_Tabs.rename(tabID, `Split: ${leftTitle} | ${rightTitle}`);
+      // Different-PDF split view: show "Name1 | Name2" without extra prefix.
+      Zotero_Tabs.rename(tabID, `${leftTitle} | ${rightTitle}`);
 
     } catch (e) {
-      this.cleanup();
+      this.cleanupTab(tabID);
       throw e;
     }
   }
@@ -766,7 +1009,8 @@ export class SplitViewFactory {
     (newContainer as any).style.height = "100%";
     (newContainer as any).style.overflow = "hidden";
 
-    // 5. Get item info for tab title
+    // 5. Get item info for tab title (for potential use), but we will
+    //    keep the original tab title when splitting the same PDF.
     const title = String(item.getField("title") || "PDF").substring(0, 50);
 
     // 6. Build split view layout
@@ -812,11 +1056,12 @@ export class SplitViewFactory {
     const self = this;
 
     newContainer.addEventListener("tab-bottom-placeholder-resize", (event: any) => {
-      if (!self.state || self.state.isCleaningUp) return;
+      const s = self.stateMap.get(tabID);
+      if (!s || s.isCleaningUp) return;
       const height = event.detail?.height !== undefined ? event.detail.height : null;
       try {
-        const leftReader = self.getInternalReaderFromBrowser(self.state.leftBrowser);
-        const rightReader = self.getInternalReaderFromBrowser(self.state.rightBrowser);
+        const leftReader = self.getInternalReaderFromBrowser(s.leftBrowser);
+        const rightReader = self.getInternalReaderFromBrowser(s.rightBrowser);
         if (leftReader?.setBottomPlaceholderHeight) {
           leftReader.setBottomPlaceholderHeight(height);
         }
@@ -829,10 +1074,11 @@ export class SplitViewFactory {
     });
 
     newContainer.addEventListener("tab-context-pane-toggle", (event: any) => {
-      if (!self.state || self.state.isCleaningUp) return;
+      const s = self.stateMap.get(tabID);
+      if (!s || s.isCleaningUp) return;
       const open = event.detail?.open ?? false;
-      if (self.state.rightBrowser) {
-        self.setContextPaneOpenForBrowser(self.state.rightBrowser, open);
+      if (s.rightBrowser) {
+        self.setContextPaneOpenForBrowser(s.rightBrowser, open);
       }
     });
 
@@ -843,8 +1089,18 @@ export class SplitViewFactory {
     // Get parent item ID for context pane
     const parentItemID = item.parentItemID || item.id;
 
-    // 7. Initialize state
-    this.state = {
+    // 7. Initialize state and store in map
+    //    Capture original tab title before any rename, so we could restore or
+    //    inspect it in the future if needed.
+    let originalTitle: string | undefined;
+    try {
+      const { tab } = Zotero_Tabs._getTab(tabID);
+      originalTitle = tab?.title;
+    } catch {
+      originalTitle = undefined;
+    }
+
+    const newState: SplitTabState = {
       tabID,
       container: newContainer as unknown as XUL.Box,
       leftBrowser,
@@ -860,7 +1116,6 @@ export class SplitViewFactory {
       activeSide: "left",
       scrollHandler: null,
       lastPrimaryScroll: null,
-      notifierID: null,
       syncPaused: false,
       sidebarToggleTimers: [],
       ctrlPressed: false,
@@ -880,25 +1135,27 @@ export class SplitViewFactory {
       isSyncingSelection: false,
       annotationItemIDs: item.getAnnotations().map((ann: any) => ann.id),
       scrollSyncRAFPending: false,
+      originalTitle,
     };
+    this.stateMap.set(tabID, newState);
 
     // Set up drag functionality
-    this.setupResizerDrag(resizer, leftBrowser, rightBrowser, mainHbox, win);
+    this.setupResizerDrag(tabID, resizer, leftBrowser, rightBrowser, mainHbox, win);
 
     // Set initial flex values
-    this.updateBrowserFlex(leftBrowser, rightBrowser, this.state.splitRatio);
+    this.updateBrowserFlex(leftBrowser, rightBrowser, newState.splitRatio);
 
-    // Register tab notifier
-    this.registerTabNotifier(win);
+    // Register global tab notifier (if not already registered)
+    this.ensureGlobalTabNotifier(win);
 
     // Set up context pane
-    this.setupContextPane(win);
+    this.setupContextPane(tabID, win);
 
     // 8. Initialize both readers with the same PDF
     try {
       await Promise.all([
-        this.initializeReader(leftBrowser, item, leftPopupset, leftViewState, false),
-        this.initializeReader(rightBrowser, item, rightPopupset, leftViewState, true),
+        this.initializeReader(tabID, leftBrowser, item, leftPopupset, leftViewState, false),
+        this.initializeReader(tabID, rightBrowser, item, rightPopupset, leftViewState, true),
       ]);
 
       // Show success notification
@@ -913,53 +1170,60 @@ export class SplitViewFactory {
       popup.startCloseTimer(3000);
 
       // Initialize context pane with left item
-      if (this.state) {
-        this.state.activeSide = "left";
-        this.updateContextPane(win, this.state.leftParentItemID);
+      const curState = this.stateMap.get(tabID);
+      if (curState) {
+        curState.activeSide = "left";
+        this.updateContextPane(tabID, win, curState.leftParentItemID);
       }
 
       // Set up focus listeners
-      this.setupFocusListeners(leftBrowser, rightBrowser, win);
+      this.setupFocusListeners(tabID, leftBrowser, rightBrowser, win);
 
       // Hook into both readers' annotation managers to mirror changes
       // instantly, replicating Zotero's native split view behavior where
       // both views share one _annotationManager. The render() hook fires
       // synchronously when an annotation is created/modified/deleted,
       // bypassing the slow onSaveAnnotations debounce path entirely.
-      this.setupAnnotationManagerSync();
+      this.setupAnnotationManagerSync(tabID);
 
       // Set up selection sync for same PDF
-      this.setupSelectionSync();
+      this.setupSelectionSync(tabID);
 
       // Hide secondary toolbar (optional, since they share annotations)
-      this.hideSecondaryToolbar();
+      this.hideSecondaryToolbar(tabID);
 
       // Enable scroll/zoom sync after delay
-      this.trackTimeout(() => {
-        if (this.state && this.state.syncEnabled) {
-          this.cacheViewerContainers();
-          this.initSyncState();
-          this.startSyncPolling();
-          this.setupResizeListener(win);
-          this.setupCtrlKeyListener(leftBrowser);
-          this.setupCtrlKeyListener(rightBrowser);
-          this.setupMainWindowKeyboardListener(win);
-          this.setupZoomButtonListeners(leftBrowser);
-          this.setupZoomButtonListeners(rightBrowser);
-          this.setupContextPaneObserver(win);
+      this.trackTimeout(newState, () => {
+        const s = this.stateMap.get(tabID);
+        if (s && s.syncEnabled) {
+          this.cacheViewerContainers(tabID);
+          this.initSyncState(tabID);
+          this.startSyncPolling(tabID);
+          this.setupResizeListener(tabID, win);
+          this.setupCtrlKeyListener(tabID, leftBrowser);
+          this.setupCtrlKeyListener(tabID, rightBrowser);
+          this.setupMainWindowKeyboardListener(tabID, win);
+          this.setupZoomButtonListeners(tabID, leftBrowser);
+          this.setupZoomButtonListeners(tabID, rightBrowser);
+          this.setupContextPaneObserver(tabID, win);
         }
       }, 500);
 
-      // 9. Update tab data and title
+      // 9. Update tab data (include split view state for session restore).
+      //    For same-PDF split view we intentionally DO NOT change the tab title,
+      //    so that the label stays exactly as the original reader tab.
       Zotero_Tabs.setTabData(tabID, {
         itemID: itemID,
         leftItemID: itemID,
         rightItemID: itemID,
+        isSplitView: true,
+        isSamePDF: true,
+        splitRatio: newState.splitRatio,
+        syncEnabled: newState.syncEnabled,
       });
-      Zotero_Tabs.rename(tabID, `Split: ${title}`);
 
     } catch (e) {
-      this.cleanup();
+      this.cleanupTab(tabID);
       throw e;
     }
   }
@@ -973,8 +1237,9 @@ export class SplitViewFactory {
    * Set up selection sync for same PDF split view
    * When an annotation is selected on one side, sync to the other
    */
-  private static setupSelectionSync() {
-    if (!this.state || !this.state.isSamePDF) return;
+  private static setupSelectionSync(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || !state.isSamePDF) return;
 
     const self = this;
 
@@ -1003,10 +1268,11 @@ export class SplitViewFactory {
             originalSetSelectedAnnotationIDs(ids);
 
             // Sync to other side if not already syncing
-            if (self.state?.isSamePDF && !self.state.isSyncingSelection && !self.state.isCleaningUp) {
-              self.state.isSyncingSelection = true;
+            const s = self.stateMap.get(tabID);
+            if (s?.isSamePDF && !s.isSyncingSelection && !s.isCleaningUp) {
+              s.isSyncingSelection = true;
               try {
-                const otherBrowser = isLeft ? self.state.rightBrowser : self.state.leftBrowser;
+                const otherBrowser = isLeft ? s.rightBrowser : s.leftBrowser;
                 const otherReader = self.getInternalReaderFromBrowser(otherBrowser);
                 if (otherReader?.setSelectedAnnotationIDs) {
                   // Clone ids array for the other browser's context
@@ -1014,8 +1280,9 @@ export class SplitViewFactory {
                   otherReader.setSelectedAnnotationIDs(clonedIds);
                 }
               } finally {
-                if (self.state) {
-                  self.state.isSyncingSelection = false;
+                const s2 = self.stateMap.get(tabID);
+                if (s2) {
+                  s2.isSyncingSelection = false;
                 }
               }
             }
@@ -1026,19 +1293,20 @@ export class SplitViewFactory {
       }
     };
 
-    setupObserver(this.state.leftBrowser, true);
-    setupObserver(this.state.rightBrowser, false);
+    setupObserver(state.leftBrowser, true);
+    setupObserver(state.rightBrowser, false);
   }
 
   /**
    * Hide the secondary (right) toolbar in same PDF split view
    * Since both views show the same PDF, we only need one toolbar
    */
-  private static hideSecondaryToolbar() {
-    if (!this.state || !this.state.isSamePDF) return;
+  private static hideSecondaryToolbar(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || !state.isSamePDF) return;
 
     try {
-      const rightReader = this.getInternalReaderFromBrowser(this.state.rightBrowser);
+      const rightReader = this.getInternalReaderFromBrowser(state.rightBrowser);
       if (!rightReader?._primaryView) return;
 
       const iframeWindow = rightReader._primaryView._iframeWindow;
@@ -1060,24 +1328,28 @@ export class SplitViewFactory {
   /**
    * Toggle scroll/page sync
    */
-  private static toggleSync() {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static toggleSync(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
-    this.state.syncEnabled = !this.state.syncEnabled;
+    state.syncEnabled = !state.syncEnabled;
 
-    if (this.state.syncEnabled) {
-      this.initSyncState();
-      this.startSyncPolling();
+    if (state.syncEnabled) {
+      this.initSyncState(tabID);
+      this.startSyncPolling(tabID);
     } else {
-      this.stopSyncPolling();
-      this.state.lastPrimaryScroll = null;
+      this.stopSyncPolling(tabID);
+      state.lastPrimaryScroll = null;
     }
+
+    // Save sync state to tab data for session restore
+    this.updateTabDataForSession(tabID);
 
     const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
       closeOnClick: true,
     })
       .createLine({
-        text: this.state.syncEnabled
+        text: state.syncEnabled
           ? getString("splitview-sync-enabled")
           : getString("splitview-sync-disabled"),
         type: "default",
@@ -1089,17 +1361,18 @@ export class SplitViewFactory {
   /**
    * Initialize sync state - record primary's current position
    */
-  private static initSyncState() {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static initSyncState(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     try {
-      const primaryBrowser = this.state.primarySide === "left"
-        ? this.state.leftBrowser
-        : this.state.rightBrowser;
+      const primaryBrowser = state.primarySide === "left"
+        ? state.leftBrowser
+        : state.rightBrowser;
       const primaryContainer = this.getViewerContainerFromBrowser(primaryBrowser);
 
       if (primaryContainer) {
-        this.state.lastPrimaryScroll = {
+        state.lastPrimaryScroll = {
           top: primaryContainer.scrollTop,
           left: primaryContainer.scrollLeft,
         };
@@ -1139,11 +1412,12 @@ export class SplitViewFactory {
    * instead of the previous approach of navigate({ pageIndex }) which only
    * scrolled to the top of the page without applying position offsets or scale.
    */
-  private static async syncPositionAndScale(sourceBrowser: XULBrowserElement, targetBrowser: XULBrowserElement) {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static async syncPositionAndScale(tabID: string, sourceBrowser: XULBrowserElement, targetBrowser: XULBrowserElement) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     // Pause scroll sync to avoid feedback loops
-    this.state.syncPaused = true;
+    state.syncPaused = true;
 
     try {
       const sourceReader = this.getInternalReaderFromBrowser(sourceBrowser);
@@ -1225,10 +1499,11 @@ export class SplitViewFactory {
     } finally {
       // Resume scroll sync after _setState has completed and the view has settled.
       // Re-initialize sync baselines to prevent position jumps.
-      this.trackTimeout(() => {
-        if (this.state) {
-          this.state.syncPaused = false;
-          this.initSyncState();
+      this.trackTimeout(state, () => {
+        const s = this.stateMap.get(tabID);
+        if (s) {
+          s.syncPaused = false;
+          this.initSyncState(tabID);
         }
       }, 400);
     }
@@ -1238,8 +1513,9 @@ export class SplitViewFactory {
    * Set up zoom button listeners on a browser's toolbar
    * This directly hooks into zoom button clicks for reliable sync
    */
-  private static setupZoomButtonListeners(browser: XULBrowserElement) {
-    if (!this.state) return;
+  private static setupZoomButtonListeners(tabID: string, browser: XULBrowserElement) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     try {
       // The zoom buttons are in the reader's main document (browser.contentWindow),
@@ -1338,27 +1614,27 @@ export class SplitViewFactory {
       const zoomResetBtn = findButton("reset");
 
       const self = this;
-      const isLeft = browser === this.state.leftBrowser;
+      const isLeft = browser === state.leftBrowser;
 
       if (zoomInBtn) {
         const zoomInHandler = () => {
-          self.handleZoomButtonClick(isLeft, "in");
+          self.handleZoomButtonClick(tabID, isLeft, "in");
         };
-        this.trackEventListener(zoomInBtn, "click", zoomInHandler as EventListener, true);
+        this.trackEventListener(state, zoomInBtn, "click", zoomInHandler as EventListener, true);
       }
 
       if (zoomOutBtn) {
         const zoomOutHandler = () => {
-          self.handleZoomButtonClick(isLeft, "out");
+          self.handleZoomButtonClick(tabID, isLeft, "out");
         };
-        this.trackEventListener(zoomOutBtn, "click", zoomOutHandler as EventListener, true);
+        this.trackEventListener(state, zoomOutBtn, "click", zoomOutHandler as EventListener, true);
       }
 
       if (zoomResetBtn) {
         const zoomResetHandler = () => {
-          self.handleZoomButtonClick(isLeft, "reset");
+          self.handleZoomButtonClick(tabID, isLeft, "reset");
         };
-        this.trackEventListener(zoomResetBtn, "click", zoomResetHandler as EventListener, true);
+        this.trackEventListener(state, zoomResetBtn, "click", zoomResetHandler as EventListener, true);
       }
 
     } catch {
@@ -1369,24 +1645,25 @@ export class SplitViewFactory {
   /**
    * Handle zoom button click - sync to secondary if this is primary
    */
-  private static handleZoomButtonClick(isLeft: boolean, direction: "in" | "out" | "reset") {
-    if (!this.state || this.state.isCleaningUp) return;
-    if (!this.state.syncEnabled) return;
+  private static handleZoomButtonClick(tabID: string, isLeft: boolean, direction: "in" | "out" | "reset") {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+    if (!state.syncEnabled) return;
 
     // Only sync from primary to secondary
-    const isPrimary = (isLeft && this.state.primarySide === "left") ||
-                      (!isLeft && this.state.primarySide === "right");
+    const isPrimary = (isLeft && state.primarySide === "left") ||
+                      (!isLeft && state.primarySide === "right");
     if (!isPrimary) return;
 
     // Skip if Ctrl is pressed (user doing Ctrl+wheel zoom shouldn't sync)
-    if (this.state.ctrlPressed) return;
+    if (state.ctrlPressed) return;
 
-    const secondaryBrowser = this.state.primarySide === "left"
-      ? this.state.rightBrowser
-      : this.state.leftBrowser;
+    const secondaryBrowser = state.primarySide === "left"
+      ? state.rightBrowser
+      : state.leftBrowser;
 
     // Pause scroll sync during zoom
-    this.state.zoomingCount++;
+    state.zoomingCount++;
 
     // Sync zoom action to secondary immediately
     if (direction === "in") {
@@ -1399,13 +1676,14 @@ export class SplitViewFactory {
 
     // Resume scroll sync after a delay, and reinitialize sync state
     // to prevent position jump (zoom changes scroll positions)
-    this.trackTimeout(() => {
-      if (this.state) {
-        this.state.zoomingCount = Math.max(0, this.state.zoomingCount - 1);
+    this.trackTimeout(state, () => {
+      const s = this.stateMap.get(tabID);
+      if (s) {
+        s.zoomingCount = Math.max(0, s.zoomingCount - 1);
         // Reinitialize sync state after zoom completes
         // This updates lastPrimaryScroll to current position
-        if (this.state.zoomingCount === 0) {
-          this.initSyncState();
+        if (s.zoomingCount === 0) {
+          this.initSyncState(tabID);
         }
       }
     }, 150); // Slightly longer to ensure zoom animation completes
@@ -1453,6 +1731,7 @@ export class SplitViewFactory {
    * @param isRight - Whether this is the right browser (shows context pane toggle)
    */
   private static async initializeReader(
+    tabID: string,
     browser: XULBrowserElement,
     item: Zotero.Item,
     popupset: XULElement,
@@ -1572,20 +1851,21 @@ export class SplitViewFactory {
       },
       onToggleSidebar: (open: boolean) => {
         // Sync sidebar toggle when sync is enabled
-        self.handleSidebarToggle(browserRef, open);
+        self.handleSidebarToggle(tabID, browserRef, open);
       },
       onChangeSidebarWidth: (_width: number) => {
         // No-op for split view
       },
       onChangeViewState: (viewState: any, _primary: boolean) => {
         // Track view state for saving to disk later
-        if (self.state && !self.state.isCleaningUp) {
-          const isLeft = browserRef === self.state.leftBrowser;
+        const s = self.stateMap.get(tabID);
+        if (s && !s.isCleaningUp) {
+          const isLeft = browserRef === s.leftBrowser;
           const stateCopy = JSON.parse(JSON.stringify(viewState));
           if (isLeft) {
-            self.state.leftViewState = stateCopy;
+            s.leftViewState = stateCopy;
           } else {
-            self.state.rightViewState = stateCopy;
+            s.rightViewState = stateCopy;
           }
         }
         // Sync zoom when scale changes (toolbar zoom in/out)
@@ -1627,9 +1907,10 @@ export class SplitViewFactory {
           // Update right reader's contextPaneOpen state after toggle
           // This controls whether the toggle button shows in the toolbar
           setTimeout(() => {
-            if (self.state?.rightBrowser) {
+            const s = self.stateMap.get(tabID);
+            if (s?.rightBrowser) {
               const isOpen = !((mainWin as any).ZoteroContextPane?.collapsed ?? true);
-              self.setContextPaneOpenForBrowser(self.state.rightBrowser, isOpen);
+              self.setContextPaneOpenForBrowser(s.rightBrowser, isOpen);
             }
           }, 50);
         }
@@ -1706,40 +1987,45 @@ export class SplitViewFactory {
 
   /**
    * Wait for internal reader to initialize
+   * This includes waiting for the PDF viewer iframe to fully load
    */
-  private static waitForInternalReader(browser: XULBrowserElement): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let attempts = 0;
-      const maxAttempts = 100;
+  private static async waitForInternalReader(browser: XULBrowserElement): Promise<void> {
+    const maxAttempts = 100;
+    let attempts = 0;
 
-      const check = () => {
-        attempts++;
-        try {
-          const internalReader = this.getInternalReaderFromBrowser(browser);
-          if (internalReader && internalReader._primaryView) {
-            resolve();
-            return;
+    // First, wait for _primaryView to exist
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        const internalReader = this.getInternalReaderFromBrowser(browser);
+        if (internalReader && internalReader._primaryView) {
+          // Found _primaryView, now wait for it to fully initialize
+          // This ensures the PDF.js viewer iframe is loaded and pdfjsLib is available
+          if (internalReader._primaryView.initializedPromise) {
+            try {
+              await internalReader._primaryView.initializedPromise;
+            } catch (e) {
+              Zotero.debug(`Split view: primaryView initialization failed: ${e}`);
+              // Continue anyway, the view might still be usable
+            }
           }
-        } catch {
-          // Ignore errors
-        }
-
-        if (attempts >= maxAttempts) {
-          reject(new Error("Timeout waiting for internal reader"));
           return;
         }
+      } catch {
+        // Ignore errors during check
+      }
 
-        setTimeout(check, 100);
-      };
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
 
-      check();
-    });
+    throw new Error("Timeout waiting for internal reader");
   }
 
   /**
    * Get internal reader object from browser
    */
   private static getInternalReaderFromBrowser(browser: XULBrowserElement): any {
+    if (!this.isBrowserAlive(browser)) return null;
     try {
       const win = browser.contentWindow;
       if (!win) return null;
@@ -1752,17 +2038,64 @@ export class SplitViewFactory {
   }
 
   /**
+   * Check if a browser element is still alive and usable
+   */
+  private static isBrowserAlive(browser: XULBrowserElement): boolean {
+    try {
+      // Try to access a property - this will throw if the object is dead
+      const _test = browser.contentWindow;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Unload a browser by setting its src to about:blank
+   * This prevents dead object errors from callbacks
+   */
+  private static unloadBrowser(browser: XULBrowserElement): void {
+    try {
+      if (this.isBrowserAlive(browser)) {
+        browser.setAttribute("src", "about:blank");
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+
+  /**
    * Close a Zotero reader without closing its tab
    * Cleans up the reader (flushes state to disk, unregisters listeners)
    * and removes it from Zotero.Reader._readers array
    */
   private static async closeReaderWithoutClosingTab(reader: any): Promise<void> {
     try {
-      // 1. Call uninit() to clean up reader (flush state to disk, unregister listeners)
+      // 1. Clear internal references FIRST, before unloading the browser
+      // The Proxy in ReaderInstance tries to access _internalReader when setting properties,
+      // which becomes a dead object after the iframe is unloaded.
+      // We must null these while they are still accessible.
+      try {
+        reader._internalReader = null;
+        reader._iframeWindow = null;
+      } catch {
+        // Ignore - may already be inaccessible
+      }
+
+      // 2. Now unload the reader's iframe
+      // ReaderTab has an _iframe property that contains the browser element
+      if (reader._iframe) {
+        this.unloadBrowser(reader._iframe);
+        // Wait a bit for pending callbacks to complete
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // 3. Call uninit() to clean up reader (flush state to disk, unregister listeners)
       if (typeof reader.uninit === "function") {
         reader.uninit();
       }
-      // 2. Remove from Zotero.Reader._readers array
+
+      // 4. Remove from Zotero.Reader._readers array
       const readers = (Zotero.Reader as any)._readers;
       const index = readers.indexOf(reader);
       if (index !== -1) {
@@ -1860,6 +2193,9 @@ export class SplitViewFactory {
     popupset: XULElement,
     params: { x: number; y: number; itemGroups: any[][] }
   ) {
+    // Check if browser is still alive
+    if (!this.isBrowserAlive(browser)) return;
+
     const mainWindow = Zotero.getMainWindow();
     const { x, y, itemGroups } = params;
 
@@ -1909,15 +2245,24 @@ export class SplitViewFactory {
 
     appendItems(popup, itemGroups);
 
-    // Add Split View menu items
-    if (this.state) {
+    // Add Split View menu items - find which tab state owns this browser
+    let ownerTabID: string | null = null;
+    for (const [tid, s] of this.stateMap) {
+      if (s.leftBrowser === browser || s.rightBrowser === browser) {
+        ownerTabID = tid;
+        break;
+      }
+    }
+    const ownerState = ownerTabID ? this.stateMap.get(ownerTabID) : null;
+    if (ownerState && ownerTabID) {
       const separator = mainWindow.document.createXULElement("menuseparator");
       popup.appendChild(separator);
 
       // Determine which side this browser is on
-      const isLeft = browser === this.state.leftBrowser;
+      const isLeft = browser === ownerState.leftBrowser;
       const currentSide = isLeft ? "left" : "right";
-      const isPrimary = this.state.primarySide === currentSide;
+      const isPrimary = ownerState.primarySide === currentSide;
+      const capturedTabID = ownerTabID;
 
       // Close Split View (revert to single reader)
       const closeItem = mainWindow.document.createXULElement("menuitem");
@@ -1925,7 +2270,7 @@ export class SplitViewFactory {
       closeItem.setAttribute("type", "checkbox");
       closeItem.setAttribute("checked", "true");
       closeItem.addEventListener("command", () => {
-        this.revertToSingleReader();
+        this.revertToSingleReader(capturedTabID);
       });
       popup.appendChild(closeItem);
 
@@ -1933,15 +2278,15 @@ export class SplitViewFactory {
       const primaryItem = mainWindow.document.createXULElement("menuitem");
       primaryItem.setAttribute("label", (isPrimary ? "📌 " : "") + getString("splitview-set-primary"));
       primaryItem.addEventListener("command", () => {
-        this.setPrimarySide(currentSide);
+        this.setPrimarySide(capturedTabID, currentSide);
       });
       popup.appendChild(primaryItem);
 
       // Toggle Sync
       const syncItem = mainWindow.document.createXULElement("menuitem");
-      syncItem.setAttribute("label", (this.state.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"));
+      syncItem.setAttribute("label", (ownerState.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"));
       syncItem.addEventListener("command", () => {
-        this.toggleSync();
+        this.toggleSync(capturedTabID);
       });
       popup.appendChild(syncItem);
 
@@ -1949,8 +2294,10 @@ export class SplitViewFactory {
       const syncPositionItem = mainWindow.document.createXULElement("menuitem");
       syncPositionItem.setAttribute("label", getString("splitview-sync-position"));
       syncPositionItem.addEventListener("command", () => {
-        const targetBrowser = isLeft ? this.state!.rightBrowser : this.state!.leftBrowser;
-        this.syncPositionAndScale(browser, targetBrowser);
+        const s = this.stateMap.get(capturedTabID);
+        if (!s) return;
+        const targetBrowser = isLeft ? s.rightBrowser : s.leftBrowser;
+        this.syncPositionAndScale(capturedTabID, browser, targetBrowser);
       });
       popup.appendChild(syncPositionItem);
     }
@@ -1988,11 +2335,12 @@ export class SplitViewFactory {
    * The DB save (onSaveAnnotations) is completely separate and fires later
    * via debounced _triggerSaving. We don't need to intercept it for UI sync.
    */
-  private static setupAnnotationManagerSync() {
-    if (!this.state || !this.state.isSamePDF) return;
+  private static setupAnnotationManagerSync(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || !state.isSamePDF) return;
 
-    const leftReader = this.getInternalReaderFromBrowser(this.state.leftBrowser);
-    const rightReader = this.getInternalReaderFromBrowser(this.state.rightBrowser);
+    const leftReader = this.getInternalReaderFromBrowser(state.leftBrowser);
+    const rightReader = this.getInternalReaderFromBrowser(state.rightBrowser);
     if (!leftReader || !rightReader) return;
 
     const leftAM = leftReader._annotationManager;
@@ -2009,14 +2357,15 @@ export class SplitViewFactory {
     // When left annotation manager renders, mirror state to right
     leftAM.render = () => {
       origLeftRender();
-      if (!isSyncing && self.state?.isSamePDF && !self.state.isCleaningUp) {
+      const s = self.stateMap.get(tabID);
+      if (!isSyncing && s?.isSamePDF && !s.isCleaningUp) {
         isSyncing = true;
         try {
           // Deep-clone annotations across browser compartments via JSON
           const serialized = JSON.stringify(leftAM._annotations);
           const parsed = JSON.parse(serialized);
           // Clone into right browser's compartment for safe cross-compartment access
-          const rightWin = self.state.rightBrowser.contentWindow;
+          const rightWin = s.rightBrowser.contentWindow;
           rightAM._annotations = rightWin
             ? Components.utils.cloneInto(parsed, rightWin, { wrapReflectors: true })
             : parsed;
@@ -2032,12 +2381,13 @@ export class SplitViewFactory {
     // When right annotation manager renders, mirror state to left
     rightAM.render = () => {
       origRightRender();
-      if (!isSyncing && self.state?.isSamePDF && !self.state.isCleaningUp) {
+      const s = self.stateMap.get(tabID);
+      if (!isSyncing && s?.isSamePDF && !s.isCleaningUp) {
         isSyncing = true;
         try {
           const serialized = JSON.stringify(rightAM._annotations);
           const parsed = JSON.parse(serialized);
-          const leftWin = self.state.leftBrowser.contentWindow;
+          const leftWin = s.leftBrowser.contentWindow;
           leftAM._annotations = leftWin
             ? Components.utils.cloneInto(parsed, leftWin, { wrapReflectors: true })
             : parsed;
@@ -2093,30 +2443,31 @@ export class SplitViewFactory {
    * Handle sidebar toggle - sync to the other reader when sync is enabled
    * Pauses scroll sync during sidebar animation to prevent position drift
    */
-  private static handleSidebarToggle(sourceBrowser: XULBrowserElement, open: boolean) {
-    if (!this.state || this.state.isCleaningUp) return;
-    if (!this.state.syncEnabled) return;
+  private static handleSidebarToggle(tabID: string, sourceBrowser: XULBrowserElement, open: boolean) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+    if (!state.syncEnabled) return;
 
     // Determine if this is the primary browser
-    const isLeft = sourceBrowser === this.state.leftBrowser;
-    const isPrimary = (isLeft && this.state.primarySide === "left") ||
-                      (!isLeft && this.state.primarySide === "right");
+    const isLeft = sourceBrowser === state.leftBrowser;
+    const isPrimary = (isLeft && state.primarySide === "left") ||
+                      (!isLeft && state.primarySide === "right");
 
     // Only sync from primary to secondary
     if (!isPrimary) return;
 
     // Cancel any pending timers from previous toggle (debounce)
     const win = Zotero.getMainWindow();
-    for (const timerId of this.state.sidebarToggleTimers) {
+    for (const timerId of state.sidebarToggleTimers) {
       win.clearTimeout(timerId);
     }
-    this.state.sidebarToggleTimers = [];
+    state.sidebarToggleTimers = [];
 
     // Pause sync during sidebar toggle to prevent position drift
-    this.state.syncPaused = true;
+    state.syncPaused = true;
 
     // Get the secondary browser
-    const secondaryBrowser = isLeft ? this.state.rightBrowser : this.state.leftBrowser;
+    const secondaryBrowser = isLeft ? state.rightBrowser : state.leftBrowser;
 
     // Toggle sidebar on secondary reader
     try {
@@ -2136,15 +2487,16 @@ export class SplitViewFactory {
     // Resume sync after sidebar animation completes and reinitialize position
     // Only set one timer - the final one that resumes sync
     const timerId = win.setTimeout(() => {
-      if (!this.state) return;
+      const s = this.stateMap.get(tabID);
+      if (!s) return;
       // Reinitialize sync state with current positions
-      this.initSyncState();
-      this.state.syncPaused = false;
+      this.initSyncState(tabID);
+      s.syncPaused = false;
       // Clear timer list
-      this.state.sidebarToggleTimers = [];
+      s.sidebarToggleTimers = [];
     }, 200);
 
-    this.state.sidebarToggleTimers.push(timerId);
+    state.sidebarToggleTimers.push(timerId);
   }
 
   /**
@@ -2152,36 +2504,36 @@ export class SplitViewFactory {
    * Called when user unchecks "Split-View Reader" in context menu
    * Keeps the focused reader and closes the other one
    */
-  private static async revertToSingleReader() {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static async revertToSingleReader(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     // Mark as cleaning up to prevent dead object errors
-    this.state.isCleaningUp = true;
+    state.isCleaningUp = true;
 
     const win = Zotero.getMainWindow();
-    const tabID = this.state.tabID;
 
     // 1. Determine which reader to keep (based on activeSide)
-    const keepLeft = this.state.activeSide === "left";
-    const keepItemID = keepLeft ? this.state.leftItemID : this.state.rightItemID;
+    const keepLeft = state.activeSide === "left";
+    const keepItemID = keepLeft ? state.leftItemID : state.rightItemID;
 
     // 2. Save current view states to disk before closing
     try {
       // Get the most current state from browsers
-      const leftCurrentState = this.getCurrentViewStateFromBrowser(this.state.leftBrowser);
-      const rightCurrentState = this.getCurrentViewStateFromBrowser(this.state.rightBrowser);
+      const leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
+      const rightCurrentState = this.getCurrentViewStateFromBrowser(state.rightBrowser);
 
       // Save both states
       await Promise.all([
-        this.saveViewStateToDisk(this.state.leftItemID, leftCurrentState || this.state.leftViewState),
-        this.saveViewStateToDisk(this.state.rightItemID, rightCurrentState || this.state.rightViewState),
+        this.saveViewStateToDisk(state.leftItemID, leftCurrentState || state.leftViewState),
+        this.saveViewStateToDisk(state.rightItemID, rightCurrentState || state.rightViewState),
       ]);
     } catch (e) {
       Zotero.debug('Split view: Error saving states: ' + e);
     }
 
     // 3. Clean up split state (but don't close tab yet)
-    this.cleanupWithoutClosingTab();
+    this.cleanupTabResources(tabID);
 
     // 4. Close current tab and open the kept reader in a new tab
     // Note: Zotero.Reader.open creates its own tab, so we close ours first
@@ -2203,37 +2555,46 @@ export class SplitViewFactory {
   }
 
   /**
-   * Clean up split view state without closing the tab
-   * Used when reverting to single reader
+   * Clean up split view state resources for a specific tab and remove from map.
+   * Core cleanup logic shared by cleanupTab and cleanupTabResources.
    */
-  private static cleanupWithoutClosingTab() {
-    if (!this.state) return;
+  private static cleanupTabResources(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     // Mark as cleaning up to prevent further operations
-    this.state.isCleaningUp = true;
+    state.isCleaningUp = true;
 
-    // Store references before nulling state
-    const eventListeners = [...this.state.eventListeners];
-    const timeoutIds = [...this.state.timeoutIds];
-    const sidebarToggleTimers = [...this.state.sidebarToggleTimers];
-    const visibilityIntervalId = this.state.visibilityIntervalId;
-    const notifierID = this.state.notifierID;
-    const annotationNotifierID = this.state.annotationNotifierID;
-    const contextPaneObserver = (this.state as any).contextPaneObserver;
+    // Unload browsers FIRST to prevent dead object errors from callbacks
+    // This stops the internal readers from firing more callbacks
+    const leftBrowser = state.leftBrowser;
+    const rightBrowser = state.rightBrowser;
+    this.unloadBrowser(leftBrowser);
+    this.unloadBrowser(rightBrowser);
+
+    // Store references before removing from map
+    const eventListeners = [...state.eventListeners];
+    const timeoutIds = [...state.timeoutIds];
+    const sidebarToggleTimers = [...state.sidebarToggleTimers];
+    const visibilityIntervalId = state.visibilityIntervalId;
+    const annotationNotifierID = state.annotationNotifierID;
+    const contextPaneObserver = (state as any).contextPaneObserver;
 
     // Clear state arrays first to prevent re-entry
-    this.state.eventListeners = [];
-    this.state.timeoutIds = [];
-    this.state.sidebarToggleTimers = [];
-    this.state.leftViewerContainer = null;
-    this.state.rightViewerContainer = null;
-    this.state.visibilityIntervalId = null;
-    this.state.notifierID = null;
-    this.state.annotationNotifierID = null;
-    (this.state as any).contextPaneObserver = null;
+    state.eventListeners = [];
+    state.timeoutIds = [];
+    state.sidebarToggleTimers = [];
+    state.leftViewerContainer = null;
+    state.rightViewerContainer = null;
+    state.visibilityIntervalId = null;
+    state.annotationNotifierID = null;
+    (state as any).contextPaneObserver = null;
 
     // Stop sync polling before other cleanup
-    this.stopSyncPolling();
+    this.stopSyncPolling(tabID);
+
+    // Remove from map
+    this.stateMap.delete(tabID);
 
     let win: Window | null = null;
     try {
@@ -2242,10 +2603,15 @@ export class SplitViewFactory {
       // Window may be dead
     }
 
-    // Remove split-view-active class
+    // Remove split-view-active class only if no other split views are active for the current tab
     if (win) {
       try {
-        win.document.documentElement?.classList.remove("split-view-active");
+        // Check if there's still an active split view for the currently selected tab
+        const Zotero_Tabs = (win as any).Zotero_Tabs;
+        const selectedTabID = Zotero_Tabs?.selectedID;
+        if (!selectedTabID || !this.stateMap.has(selectedTabID)) {
+          win.document.documentElement?.classList.remove("split-view-active");
+        }
       } catch {
         // Ignore errors - document may be dead
       }
@@ -2289,15 +2655,6 @@ export class SplitViewFactory {
       }
     }
 
-    // Unregister tab notifier
-    if (notifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(notifierID);
-      } catch {
-        // Ignore errors
-      }
-    }
-
     // Unregister annotation sync notifier (same PDF split view)
     if (annotationNotifierID) {
       try {
@@ -2316,19 +2673,69 @@ export class SplitViewFactory {
       }
     }
 
-    this.state = null;
+    // If no more split views, unregister global tab notifier
+    if (this.stateMap.size === 0 && this.globalTabNotifierID) {
+      try {
+        Zotero.Notifier.unregisterObserver(this.globalTabNotifierID);
+      } catch {
+        // Ignore errors
+      }
+      this.globalTabNotifierID = null;
+    }
+  }
+
+  /**
+   * Clean up a specific tab's split view (with state save)
+   */
+  private static cleanupTab(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
+
+    // Prevent re-entry and dead object access
+    if (state.isCleaningUp) return;
+    state.isCleaningUp = true;
+
+    // Save view states to disk before cleanup (fire and forget)
+    const leftItemID = state.leftItemID;
+    const rightItemID = state.rightItemID;
+    const leftViewState = state.leftViewState;
+    const rightViewState = state.rightViewState;
+
+    // Try to get current state from browsers (may fail if dead)
+    let leftCurrentState: any = null;
+    let rightCurrentState: any = null;
+    try {
+      leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
+    } catch {
+      // Browser may be dead
+    }
+    try {
+      rightCurrentState = this.getCurrentViewStateFromBrowser(state.rightBrowser);
+    } catch {
+      // Browser may be dead
+    }
+
+    // Save states asynchronously (don't await)
+    Promise.all([
+      this.saveViewStateToDisk(leftItemID, leftCurrentState || leftViewState),
+      this.saveViewStateToDisk(rightItemID, rightCurrentState || rightViewState),
+    ]).catch(() => { /* Ignore save errors */ });
+
+    // Reset isCleaningUp so cleanupTabResources can process it
+    state.isCleaningUp = false;
+
+    this.cleanupTabResources(tabID);
   }
 
   /**
    * Close split tab
    */
-  private static closeSplitTab() {
-    if (!this.state) return;
-
-    const tabID = this.state.tabID;
+  private static closeSplitTab(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     // Cleanup state first
-    this.cleanup();
+    this.cleanupTab(tabID);
 
     try {
       const win = Zotero.getMainWindow();
@@ -2356,13 +2763,14 @@ export class SplitViewFactory {
    * coalesced into a single DOM write. This reduces cross-compartment
    * overhead and prevents forced reflows during fast scrolling.
    */
-  private static startSyncPolling() {
-    if (!this.state || this.state.isCleaningUp) return;
+  private static startSyncPolling(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
 
     try {
-      const primaryBrowser = this.state.primarySide === "left"
-        ? this.state.leftBrowser
-        : this.state.rightBrowser;
+      const primaryBrowser = state.primarySide === "left"
+        ? state.leftBrowser
+        : state.rightBrowser;
 
       const primaryContainer = this.getViewerContainerFromBrowser(primaryBrowser);
       if (!primaryContainer) return;
@@ -2370,17 +2778,19 @@ export class SplitViewFactory {
       const self = this;
       const win = Zotero.getMainWindow();
 
-      this.state.scrollHandler = () => {
-        if (!self.state || self.state.scrollSyncRAFPending) return;
-        self.state.scrollSyncRAFPending = true;
+      state.scrollHandler = () => {
+        const s = self.stateMap.get(tabID);
+        if (!s || s.scrollSyncRAFPending) return;
+        s.scrollSyncRAFPending = true;
         win.requestAnimationFrame(() => {
-          if (self.state) {
-            self.state.scrollSyncRAFPending = false;
-            self.syncViews();
+          const s2 = self.stateMap.get(tabID);
+          if (s2) {
+            s2.scrollSyncRAFPending = false;
+            self.syncViews(tabID);
           }
         });
       };
-      primaryContainer.addEventListener("scroll", this.state.scrollHandler, { passive: true });
+      primaryContainer.addEventListener("scroll", state.scrollHandler, { passive: true });
     } catch (e) {
       Zotero.debug(`Split view: startSyncPolling error (browser may be dead): ${e}`);
     }
@@ -2389,28 +2799,27 @@ export class SplitViewFactory {
   /**
    * Stop sync polling
    */
-  private static stopSyncPolling() {
-    if (!this.state) return;
+  private static stopSyncPolling(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     // Remove scroll listener
-    if (this.state.scrollHandler) {
+    if (state.scrollHandler) {
       try {
-        const primaryBrowser = this.state.primarySide === "left"
-          ? this.state.leftBrowser
-          : this.state.rightBrowser;
+        const primaryBrowser = state.primarySide === "left"
+          ? state.leftBrowser
+          : state.rightBrowser;
         const primaryContainer = this.getViewerContainerFromBrowser(primaryBrowser);
         if (primaryContainer) {
-          primaryContainer.removeEventListener("scroll", this.state.scrollHandler);
+          primaryContainer.removeEventListener("scroll", state.scrollHandler);
         }
       } catch {
         // Browser may be dead
       }
-      this.state.scrollHandler = null;
+      state.scrollHandler = null;
     }
     // Cancel any pending rAF
-    if (this.state) {
-      this.state.scrollSyncRAFPending = false;
-    }
+    state.scrollSyncRAFPending = false;
   }
 
   private static SYNC_THRESHOLD = 1;
@@ -2420,20 +2829,21 @@ export class SplitViewFactory {
    * Called once per animation frame (via rAF) to batch scroll events.
    * Uses cached viewer containers and delta-based scrolling for performance.
    */
-  private static syncViews() {
-    if (!this.state || this.state.isCleaningUp) return;
-    if (!this.state.lastPrimaryScroll) return;
-    if (this.state.syncPaused) return;
-    if (this.state.ctrlPressed) return;
-    if (this.state.zoomingCount > 0) return;
+  private static syncViews(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+    if (!state.lastPrimaryScroll) return;
+    if (state.syncPaused) return;
+    if (state.ctrlPressed) return;
+    if (state.zoomingCount > 0) return;
 
     try {
-      const primaryContainer = this.state.primarySide === "left"
-        ? this.state.leftViewerContainer
-        : this.state.rightViewerContainer;
-      const secondaryContainer = this.state.primarySide === "left"
-        ? this.state.rightViewerContainer
-        : this.state.leftViewerContainer;
+      const primaryContainer = state.primarySide === "left"
+        ? state.leftViewerContainer
+        : state.rightViewerContainer;
+      const secondaryContainer = state.primarySide === "left"
+        ? state.rightViewerContainer
+        : state.leftViewerContainer;
 
       if (!primaryContainer || !secondaryContainer) return;
 
@@ -2441,8 +2851,8 @@ export class SplitViewFactory {
       const primaryTop = primaryContainer.scrollTop;
       const primaryLeft = primaryContainer.scrollLeft;
 
-      const deltaTop = primaryTop - this.state.lastPrimaryScroll.top;
-      const deltaLeft = primaryLeft - this.state.lastPrimaryScroll.left;
+      const deltaTop = primaryTop - state.lastPrimaryScroll.top;
+      const deltaLeft = primaryLeft - state.lastPrimaryScroll.left;
 
       if (Math.abs(deltaTop) >= this.SYNC_THRESHOLD || Math.abs(deltaLeft) >= this.SYNC_THRESHOLD) {
         // Single write: use scrollTo for atomic position update
@@ -2450,7 +2860,7 @@ export class SplitViewFactory {
         const newLeft = Math.max(0, secondaryContainer.scrollLeft + deltaLeft);
         secondaryContainer.scrollTo(newLeft, newTop);
 
-        this.state.lastPrimaryScroll = {
+        state.lastPrimaryScroll = {
           top: primaryTop,
           left: primaryLeft,
         };
@@ -2464,6 +2874,7 @@ export class SplitViewFactory {
    * Call zoomIn on a browser's internal reader
    */
   private static zoomInForBrowser(browser: XULBrowserElement) {
+    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomIn === "function") {
@@ -2478,6 +2889,7 @@ export class SplitViewFactory {
    * Call zoomOut on a browser's internal reader
    */
   private static zoomOutForBrowser(browser: XULBrowserElement) {
+    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomOut === "function") {
@@ -2492,6 +2904,7 @@ export class SplitViewFactory {
    * Call zoomReset on a browser's internal reader
    */
   private static zoomResetForBrowser(browser: XULBrowserElement) {
+    if (!this.isBrowserAlive(browser)) return;
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomReset === "function") {
@@ -2540,6 +2953,7 @@ export class SplitViewFactory {
    * if the event handler is not available.
    */
   private static setContextPaneOpenForBrowser(browser: XULBrowserElement, open: boolean) {
+    if (!this.isBrowserAlive(browser)) return;
     try {
       const win = browser.contentWindow;
       if (!win) return;
@@ -2575,8 +2989,9 @@ export class SplitViewFactory {
    * Set up observer to watch context pane collapsed state changes
    * When context pane is toggled via sidenav, update right reader's toggle button visibility
    */
-  private static setupContextPaneObserver(win: Window) {
-    if (!this.state) return;
+  private static setupContextPaneObserver(tabID: string, win: Window) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     try {
       const contextPane = win.document.getElementById("zotero-context-pane");
@@ -2587,8 +3002,9 @@ export class SplitViewFactory {
         for (const mutation of mutations) {
           if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
             const isOpen = contextPane.getAttribute("collapsed") !== "true";
-            if (self.state?.rightBrowser) {
-              self.setContextPaneOpenForBrowser(self.state.rightBrowser, isOpen);
+            const s = self.stateMap.get(tabID);
+            if (s?.rightBrowser) {
+              self.setContextPaneOpenForBrowser(s.rightBrowser, isOpen);
             }
           }
         }
@@ -2600,9 +3016,7 @@ export class SplitViewFactory {
       });
 
       // Store observer for cleanup
-      if (this.state) {
-        (this.state as any).contextPaneObserver = observer;
-      }
+      (state as any).contextPaneObserver = observer;
     } catch {
       // Ignore errors
     }
@@ -2612,8 +3026,9 @@ export class SplitViewFactory {
    * Set up Ctrl key listener on a browser's iframe to detect Ctrl+wheel zoom
    * and Ctrl+Plus/Minus keyboard shortcuts for zoom sync
    */
-  private static setupCtrlKeyListener(browser: XULBrowserElement) {
-    if (!this.state) return;
+  private static setupCtrlKeyListener(tabID: string, browser: XULBrowserElement) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     try {
       const internalReader = this.getInternalReaderFromBrowser(browser);
@@ -2637,13 +3052,13 @@ export class SplitViewFactory {
       const wrappedReaderWin = readerWin ? ((readerWin as any).wrappedJSObject || readerWin) : null;
 
       const self = this;
-      const isLeft = browser === this.state.leftBrowser;
 
       const keydownHandler = (e: KeyboardEvent) => {
-        if (!self.state) return;
+        const s = self.stateMap.get(tabID);
+        if (!s) return;
 
         if (e.key === "Control") {
-          self.state.ctrlPressed = true;
+          s.ctrlPressed = true;
           return;
         }
 
@@ -2652,24 +3067,26 @@ export class SplitViewFactory {
       };
       // Use capture phase to intercept before Zotero/PDF.js handlers
       // Listen on both PDF iframe doc and reader window for better coverage
-      this.trackEventListener(doc, "keydown", keydownHandler as EventListener, true);
+      this.trackEventListener(state, doc, "keydown", keydownHandler as EventListener, true);
       if (wrappedReaderWin && wrappedReaderWin.document) {
-        this.trackEventListener(wrappedReaderWin.document, "keydown", keydownHandler as EventListener, true);
+        this.trackEventListener(state, wrappedReaderWin.document, "keydown", keydownHandler as EventListener, true);
       }
 
       const keyupHandler = (e: KeyboardEvent) => {
-        if (e.key === "Control" && self.state) {
-          self.state.ctrlPressed = false;
+        const s = self.stateMap.get(tabID);
+        if (e.key === "Control" && s) {
+          s.ctrlPressed = false;
         }
       };
-      this.trackEventListener(doc, "keyup", keyupHandler as EventListener);
+      this.trackEventListener(state, doc, "keyup", keyupHandler as EventListener);
 
       const blurHandler = () => {
-        if (self.state) {
-          self.state.ctrlPressed = false;
+        const s = self.stateMap.get(tabID);
+        if (s) {
+          s.ctrlPressed = false;
         }
       };
-      this.trackEventListener(wrappedWin, "blur", blurHandler as EventListener);
+      this.trackEventListener(state, wrappedWin, "blur", blurHandler as EventListener);
     } catch {
       // Ignore errors
     }
@@ -2678,16 +3095,17 @@ export class SplitViewFactory {
   /**
    * Handle keyboard zoom (Ctrl+Plus/Minus) - sync to secondary
    */
-  private static handleKeyboardZoom(isLeft: boolean, direction: "in" | "out") {
-    if (!this.state || this.state.isCleaningUp) return;
-    if (!this.state.syncEnabled) return;
+  private static handleKeyboardZoom(tabID: string, isLeft: boolean, direction: "in" | "out") {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+    if (!state.syncEnabled) return;
 
-    const secondaryBrowser = this.state.primarySide === "left"
-      ? this.state.rightBrowser
-      : this.state.leftBrowser;
+    const secondaryBrowser = state.primarySide === "left"
+      ? state.rightBrowser
+      : state.leftBrowser;
 
     // Pause scroll sync during zoom
-    this.state.zoomingCount++;
+    state.zoomingCount++;
 
     // Sync zoom action to secondary
     if (direction === "in") {
@@ -2697,11 +3115,12 @@ export class SplitViewFactory {
     }
 
     // Resume scroll sync after zoom completes
-    this.trackTimeout(() => {
-      if (this.state) {
-        this.state.zoomingCount = Math.max(0, this.state.zoomingCount - 1);
-        if (this.state.zoomingCount === 0) {
-          this.initSyncState();
+    this.trackTimeout(state, () => {
+      const s = this.stateMap.get(tabID);
+      if (s) {
+        s.zoomingCount = Math.max(0, s.zoomingCount - 1);
+        if (s.zoomingCount === 0) {
+          this.initSyncState(tabID);
         }
       }
     }, 150);
@@ -2711,17 +3130,19 @@ export class SplitViewFactory {
    * Set up resize listener to pause scroll sync during window resize
    * This prevents false scroll sync when context pane expands/collapses
    */
-  private static setupResizeListener(win: Window) {
-    if (!this.state) return;
+  private static setupResizeListener(tabID: string, win: Window) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     const self = this;
     let resizeTimer: number | null = null;
 
     const resizeHandler = () => {
-      if (!self.state) return;
+      const s = self.stateMap.get(tabID);
+      if (!s) return;
 
       // Pause sync during resize
-      self.state.syncPaused = true;
+      s.syncPaused = true;
 
       // Clear any existing timer
       if (resizeTimer !== null) {
@@ -2730,30 +3151,33 @@ export class SplitViewFactory {
 
       // Resume sync after resize settles and reinitialize sync state
       resizeTimer = win.setTimeout(() => {
-        if (self.state) {
+        const s2 = self.stateMap.get(tabID);
+        if (s2) {
           // Reinitialize sync state with new positions after resize
-          self.initSyncState();
-          self.state.syncPaused = false;
+          self.initSyncState(tabID);
+          s2.syncPaused = false;
         }
         resizeTimer = null;
       }, 200);
     };
 
-    this.trackEventListener(win, "resize", resizeHandler as EventListener);
+    this.trackEventListener(state, win, "resize", resizeHandler as EventListener);
   }
 
   /**
    * Set up main window keyboard listener for Ctrl+=/- zoom sync
    * This catches keyboard events at the top level before they're consumed
    */
-  private static setupMainWindowKeyboardListener(win: Window) {
-    if (!this.state) return;
+  private static setupMainWindowKeyboardListener(tabID: string, win: Window) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     const self = this;
 
     const keydownHandler = (e: KeyboardEvent) => {
-      if (!self.state) return;
-      if (!self.state.syncEnabled) return;
+      const s = self.stateMap.get(tabID);
+      if (!s) return;
+      if (!s.syncEnabled) return;
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
 
       // Check if zoom key (support both Ctrl+=/- and Ctrl+Shift+=/-)
@@ -2768,10 +3192,10 @@ export class SplitViewFactory {
 
       // Determine which browser has focus to check if it's primary
       const activeElement = win.document.activeElement;
-      const leftBrowserFocused = self.state.leftBrowser.contains(activeElement) ||
-                                  self.state.leftBrowser === activeElement;
-      const rightBrowserFocused = self.state.rightBrowser.contains(activeElement) ||
-                                   self.state.rightBrowser === activeElement;
+      const leftBrowserFocused = s.leftBrowser.contains(activeElement) ||
+                                  s.leftBrowser === activeElement;
+      const rightBrowserFocused = s.rightBrowser.contains(activeElement) ||
+                                   s.rightBrowser === activeElement;
 
       // If neither browser is focused, use activeSide
       let isLeft: boolean;
@@ -2780,23 +3204,23 @@ export class SplitViewFactory {
       } else if (rightBrowserFocused) {
         isLeft = false;
       } else {
-        isLeft = self.state.activeSide === "left";
+        isLeft = s.activeSide === "left";
       }
 
-      const isPrimary = (isLeft && self.state.primarySide === "left") ||
-                        (!isLeft && self.state.primarySide === "right");
+      const isPrimary = (isLeft && s.primarySide === "left") ||
+                        (!isLeft && s.primarySide === "right");
       if (!isPrimary) return;
 
       // Sync zoom to secondary
       if (isZoomIn) {
-        self.handleKeyboardZoom(isLeft, "in");
+        self.handleKeyboardZoom(tabID, isLeft, "in");
       } else if (isZoomOut) {
-        self.handleKeyboardZoom(isLeft, "out");
+        self.handleKeyboardZoom(tabID, isLeft, "out");
       }
     };
 
     // Use capture phase at main window level
-    this.trackEventListener(win, "keydown", keydownHandler as EventListener, true);
+    this.trackEventListener(state, win, "keydown", keydownHandler as EventListener, true);
   }
 
   /**
@@ -2832,36 +3256,36 @@ export class SplitViewFactory {
   }
 
   /**
-   * Cleanup state
-   */
-  /**
    * Set up focus listeners for context pane switching
    */
   private static setupFocusListeners(
+    tabID: string,
     leftBrowser: XULBrowserElement,
     rightBrowser: XULBrowserElement,
     win: Window
   ) {
-    if (!this.state) return;
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     const self = this;
 
     // Helper function to handle focus change
     const handleFocus = (side: "left" | "right") => {
-      if (!self.state) return;
-      if (self.state.activeSide === side) return; // Already active
+      const s = self.stateMap.get(tabID);
+      if (!s) return;
+      if (s.activeSide === side) return; // Already active
 
-      self.state.activeSide = side;
+      s.activeSide = side;
 
       // Skip context pane update when both sides belong to the same
       // Zotero item (same parentItemID), to avoid redundant updates
       // that cause "Section item data changed" log spam
-      if (self.state.leftParentItemID === self.state.rightParentItemID) return;
+      if (s.leftParentItemID === s.rightParentItemID) return;
 
       const parentItemID = side === "left"
-        ? self.state.leftParentItemID
-        : self.state.rightParentItemID;
-      self.updateContextPane(win, parentItemID);
+        ? s.leftParentItemID
+        : s.rightParentItemID;
+      self.updateContextPane(tabID, win, parentItemID);
     };
 
     const leftClickHandler = () => handleFocus("left");
@@ -2869,19 +3293,20 @@ export class SplitViewFactory {
     const leftFocusHandler = () => handleFocus("left");
     const rightFocusHandler = () => handleFocus("right");
 
-    this.trackEventListener(leftBrowser, "click", leftClickHandler as EventListener, true);
-    this.trackEventListener(rightBrowser, "click", rightClickHandler as EventListener, true);
-    this.trackEventListener(leftBrowser, "focus", leftFocusHandler as EventListener, true);
-    this.trackEventListener(rightBrowser, "focus", rightFocusHandler as EventListener, true);
+    this.trackEventListener(state, leftBrowser, "click", leftClickHandler as EventListener, true);
+    this.trackEventListener(state, rightBrowser, "click", rightClickHandler as EventListener, true);
+    this.trackEventListener(state, leftBrowser, "focus", leftFocusHandler as EventListener, true);
+    this.trackEventListener(state, rightBrowser, "focus", rightFocusHandler as EventListener, true);
   }
 
   /**
    * Update context pane to show the specified item
    * Based on Zotero's contextPane.js implementation
    */
-  private static updateContextPane(win: Window, parentItemID: number) {
+  private static updateContextPane(tabID: string, win: Window, parentItemID: number) {
     try {
-      if (!this.state || this.state.isCleaningUp) return;
+      const state = this.stateMap.get(tabID);
+      if (!state || state.isCleaningUp) return;
 
       const document = win.document;
       const item = Zotero.Items.get(parentItemID);
@@ -2893,7 +3318,7 @@ export class SplitViewFactory {
       const itemPaneDeck = contextPaneElement._itemPaneDeck;
       if (!itemPaneDeck) return;
 
-      let itemDetails = itemPaneDeck.querySelector(`[data-tab-id="${this.state.tabID}"]`) as any;
+      let itemDetails = itemPaneDeck.querySelector(`[data-tab-id="${tabID}"]`) as any;
 
       if (itemDetails) {
         itemDetails.item = item;
@@ -2903,8 +3328,8 @@ export class SplitViewFactory {
       } else {
 
         itemDetails = document.createXULElement("item-details");
-        itemDetails.id = this.state.tabID + "-context";
-        itemDetails.dataset.tabId = this.state.tabID;
+        itemDetails.id = tabID + "-context";
+        itemDetails.dataset.tabId = tabID;
         itemDetails.className = "zotero-item-pane-content";
         itemPaneDeck.appendChild(itemDetails);
 
@@ -2914,7 +3339,7 @@ export class SplitViewFactory {
         const editable = library && library.editable && !item.deleted;
 
         itemDetails.editable = editable;
-        itemDetails.tabID = this.state.tabID;
+        itemDetails.tabID = tabID;
         itemDetails.tabType = "reader"; // Use reader type for proper rendering
         itemDetails.item = item;
 
@@ -2930,52 +3355,56 @@ export class SplitViewFactory {
   }
 
   /**
-   * Register a notifier to handle tab selection and close events
-   * This ensures the context pane is shown when our tab is selected
-   * and cleanup happens when our tab is closed
+   * Ensure the global tab notifier is registered.
+   * This is a single notifier shared across all split view tabs.
+   * It handles CSS class toggling and tab close cleanup for all split views.
    */
-  private static registerTabNotifier(win: Window) {
-    if (!this.state) return;
+  private static ensureGlobalTabNotifier(win: Window) {
+    // Already registered
+    if (this.globalTabNotifierID) return;
 
     const self = this;
 
-    // Create a notifier observer for tab events
     const notifierCallback = {
-      notify: (action: string, type: string, ids: (string | number)[], extraData: any) => {
+      notify: (action: string, type: string, ids: (string | number)[], _extraData: any) => {
         if (type !== "tab") return;
-        if (!self.state) return;
 
         if (action === "select") {
           const selectedTabID = String(ids[0]);
-          if (selectedTabID === self.state.tabID) {
+          const selectedState = self.stateMap.get(selectedTabID);
+
+          if (selectedState && !selectedState.isCleaningUp) {
+            // This tab has split view - activate CSS and context pane
             win.document.documentElement?.classList.add("split-view-active");
             self.showContextPaneForSplitView(win);
             // Update context pane content to show the active side's item
-            const parentItemID = self.state.activeSide === "left"
-              ? self.state.leftParentItemID
-              : self.state.rightParentItemID;
-            self.updateContextPane(win, parentItemID);
+            const parentItemID = selectedState.activeSide === "left"
+              ? selectedState.leftParentItemID
+              : selectedState.rightParentItemID;
+            self.updateContextPane(selectedTabID, win, parentItemID);
           } else {
+            // This tab has no split view - remove CSS class
             win.document.documentElement?.classList.remove("split-view-active");
           }
         } else if (action === "close") {
-          // Handle tab close - cleanup our state
+          // Handle tab close - cleanup if this tab has split view
           const closedTabID = String(ids[0]);
-          if (closedTabID === self.state.tabID && !self.state.isCleaningUp) {
+          const closedState = self.stateMap.get(closedTabID);
+          if (closedState && !closedState.isCleaningUp) {
             // Save states before cleanup
-            const leftItemID = self.state.leftItemID;
-            const rightItemID = self.state.rightItemID;
-            const leftViewState = self.state.leftViewState;
-            const rightViewState = self.state.rightViewState;
+            const leftItemID = closedState.leftItemID;
+            const rightItemID = closedState.rightItemID;
+            const leftViewState = closedState.leftViewState;
+            const rightViewState = closedState.rightViewState;
 
             // Try to get current state from browsers
             let leftCurrentState: any = null;
             let rightCurrentState: any = null;
             try {
-              leftCurrentState = self.getCurrentViewStateFromBrowser(self.state.leftBrowser);
+              leftCurrentState = self.getCurrentViewStateFromBrowser(closedState.leftBrowser);
             } catch { /* Browser may be dead */ }
             try {
-              rightCurrentState = self.getCurrentViewStateFromBrowser(self.state.rightBrowser);
+              rightCurrentState = self.getCurrentViewStateFromBrowser(closedState.rightBrowser);
             } catch { /* Browser may be dead */ }
 
             // Save states asynchronously
@@ -2984,14 +3413,15 @@ export class SplitViewFactory {
               self.saveViewStateToDisk(rightItemID, rightCurrentState || rightViewState),
             ]).catch(() => { /* Ignore save errors */ });
 
-            self.cleanupWithoutClosingTab();
+            self.cleanupTabResources(closedTabID);
           }
         }
       },
     };
 
-    const notifierID = Zotero.Notifier.registerObserver(notifierCallback, ["tab"], "splitView", 20);
-    this.state.notifierID = notifierID;
+    this.globalTabNotifierID = Zotero.Notifier.registerObserver(
+      notifierCallback, ["tab"], "splitView", 20
+    );
   }
 
   /**
@@ -3097,159 +3527,24 @@ export class SplitViewFactory {
    * Set up context pane for our split view tab
    * Note: Polling removed - tab notifier handles tab selection events
    */
-  private static setupContextPane(win: Window) {
-    if (!this.state) return;
+  private static setupContextPane(tabID: string, win: Window) {
+    const state = this.stateMap.get(tabID);
+    if (!state) return;
 
     // Initialize immediately
     this.showContextPaneForSplitView(win);
 
     // Single delayed call to ensure async updates complete
     // (Replaced multiple 50ms/150ms/300ms calls with a single 300ms call)
-    this.trackTimeout(() => this.showContextPaneForSplitView(win), 300);
+    this.trackTimeout(state, () => this.showContextPaneForSplitView(win), 300);
 
-    // Note: Polling interval removed - registerTabNotifier() already handles
+    // Note: Polling interval removed - ensureGlobalTabNotifier() already handles
     // tab selection events and calls showContextPaneForSplitView() when needed
   }
 
-  private static cleanup() {
-    if (!this.state) return;
-
-    // Prevent re-entry and dead object access
-    if (this.state.isCleaningUp) return;
-    this.state.isCleaningUp = true;
-
-    // Save view states to disk before cleanup (fire and forget)
-    const leftItemID = this.state.leftItemID;
-    const rightItemID = this.state.rightItemID;
-    const leftViewState = this.state.leftViewState;
-    const rightViewState = this.state.rightViewState;
-
-    // Try to get current state from browsers (may fail if dead)
-    let leftCurrentState: any = null;
-    let rightCurrentState: any = null;
-    try {
-      leftCurrentState = this.getCurrentViewStateFromBrowser(this.state.leftBrowser);
-    } catch {
-      // Browser may be dead
-    }
-    try {
-      rightCurrentState = this.getCurrentViewStateFromBrowser(this.state.rightBrowser);
-    } catch {
-      // Browser may be dead
-    }
-
-    // Save states asynchronously (don't await)
-    Promise.all([
-      this.saveViewStateToDisk(leftItemID, leftCurrentState || leftViewState),
-      this.saveViewStateToDisk(rightItemID, rightCurrentState || rightViewState),
-    ]).catch(() => { /* Ignore save errors */ });
-
-    // Store references before nulling state
-    const eventListeners = [...this.state.eventListeners];
-    const timeoutIds = [...this.state.timeoutIds];
-    const sidebarToggleTimers = [...this.state.sidebarToggleTimers];
-    const visibilityIntervalId = this.state.visibilityIntervalId;
-    const notifierID = this.state.notifierID;
-    const annotationNotifierID = this.state.annotationNotifierID;
-    const contextPaneObserver = (this.state as any).contextPaneObserver;
-
-    // Clear state arrays first
-    this.state.eventListeners = [];
-    this.state.timeoutIds = [];
-    this.state.sidebarToggleTimers = [];
-    this.state.leftViewerContainer = null;
-    this.state.rightViewerContainer = null;
-    this.state.visibilityIntervalId = null;
-    this.state.notifierID = null;
-    this.state.annotationNotifierID = null;
-    (this.state as any).contextPaneObserver = null;
-
-    // Stop sync polling before other cleanup
-    this.stopSyncPolling();
-
-    let win: Window | null = null;
-    try {
-      win = Zotero.getMainWindow();
-    } catch {
-      // Window may be dead
-    }
-
-    // Remove split-view-active class
-    if (win) {
-      try {
-        win.document.documentElement?.classList.remove("split-view-active");
-      } catch {
-        // Ignore errors - document may be dead
-      }
-    }
-
-    // Remove all tracked event listeners
-    for (const { target, type, listener, options } of eventListeners) {
-      try {
-        target.removeEventListener(type, listener, options);
-      } catch {
-        // Ignore removal errors (target may be dead)
-      }
-    }
-
-    // Clear all tracked timeouts
-    if (win) {
-      for (const id of timeoutIds) {
-        try {
-          win.clearTimeout(id);
-        } catch {
-          // Ignore errors
-        }
-      }
-
-      // Clear sidebar toggle timers
-      for (const timerId of sidebarToggleTimers) {
-        try {
-          win.clearTimeout(timerId);
-        } catch {
-          // Ignore errors
-        }
-      }
-
-      // Clear visibility check interval
-      if (visibilityIntervalId !== null) {
-        try {
-          win.clearInterval(visibilityIntervalId);
-        } catch {
-          // Ignore errors
-        }
-      }
-    }
-
-    // Unregister tab notifier
-    if (notifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(notifierID);
-      } catch {
-        // Ignore errors
-      }
-    }
-
-    // Unregister annotation sync notifier (same PDF split view)
-    if (annotationNotifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(annotationNotifierID);
-      } catch {
-        // Ignore errors
-      }
-    }
-
-    // Disconnect context pane observer
-    if (contextPaneObserver) {
-      try {
-        contextPaneObserver.disconnect();
-      } catch {
-        // Ignore errors
-      }
-    }
-
-    this.state = null;
-  }
+  // NOTE: The old singleton cleanup() method has been replaced by:
+  // - cleanupTab(tabID): saves state + cleans up resources for a specific tab
+  // - cleanupTabResources(tabID): cleans up resources only (no state save)
 
   // === PDF selector UI methods (retained from original) ===
 
