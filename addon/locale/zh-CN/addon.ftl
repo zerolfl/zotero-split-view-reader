@@ -24,3 +24,6 @@ splitview-sync-disabled = 操作同步已禁用
 splitview-set-primary = 主窗口
 splitview-primary-set = 已设为主窗口
 splitview-closed = 分屏视图已关闭
+splitview-same-pdf-loaded = 同文件分屏已加载
+splitview-sync-position = 同步位置和缩放
+splitview-position-synced = 位置和缩放已同步

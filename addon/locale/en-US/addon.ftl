@@ -24,3 +24,6 @@ splitview-sync-disabled = Actions sync disabled
 splitview-set-primary = Primary Window
 splitview-primary-set = Set as primary window
 splitview-closed = Split view closed
+splitview-same-pdf-loaded = Same PDF split view loaded
+splitview-sync-position = Sync Position & Zoom
+splitview-position-synced = Position and zoom synced
