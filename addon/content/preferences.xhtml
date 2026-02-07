@@ -4,19 +4,21 @@
 <groupbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
   <!-- Basic Settings -->
   <label>
-    <html:h2 data-l10n-id="pref-section-basic" style="margin: 8px 0 8px 0;"></html:h2>
+    <html:h2 data-l10n-id="pref-section-basic" style="margin: 20px 0 8px 0;"></html:h2>
   </label>
   <checkbox id="zotero-prefpane-__addonRef__-follow-focus" preference="followFocusPrimary"
-    data-l10n-id="pref-follow-focus" />
+    data-l10n-id="pref-follow-focus" style="margin-top: 0;" />
   <description data-l10n-id="pref-follow-focus-desc" style="font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 24px;" />
   <checkbox id="zotero-prefpane-__addonRef__-sync-enabled" preference="syncEnabled" data-l10n-id="pref-sync-enabled" />
   <description data-l10n-id="pref-sync-enabled-desc" style="font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 24px;" />
+</groupbox>
 
+<groupbox>
   <!-- Appearance Settings -->
   <label>
-    <html:h2 data-l10n-id="pref-section-appearance" style="margin: 20px 0 8px 0;"></html:h2>
+    <html:h2 data-l10n-id="pref-section-appearance" style="margin: 20px 0 0px 0;"></html:h2>
   </label>
-  <hbox align="center" style="margin: 0px 0 4px 0;">
+  <hbox align="center" style="margin-top: 0;">
     <html:label data-l10n-id="pref-scrollbar-color" style="margin-right: 8px;"></html:label>
     <html:span style="margin-right: 4px;">R</html:span>
     <html:input type="number" id="zotero-prefpane-__addonRef__-scrollbar-r" min="0" max="255"
@@ -32,11 +34,13 @@
   </hbox>
   <description data-l10n-id="pref-scrollbar-color-desc" style="font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 0;" />
 </groupbox>
+
 <groupbox>
+  <!-- About -->
   <label>
     <html:h2 data-l10n-id="pref-section-about" style="margin: 20px 0 8px 0;"></html:h2>
   </label>
-  <description data-l10n-id="pref-about-desc" style="margin: 0 0 6px 0;" />
+  <description data-l10n-id="pref-about-desc" style="margin: 0 0 8px 0;" />
   <html:a href="https://github.com/zerolfl/zotero-split-view-reader" style="text-decoration: none; cursor: pointer;"
     onclick="Zotero.launchURL(this.href); event.preventDefault();">⭐ Star it on GitHub</html:a>
 </groupbox>
