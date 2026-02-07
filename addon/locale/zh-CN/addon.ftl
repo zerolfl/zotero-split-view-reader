@@ -27,3 +27,5 @@ splitview-closed = 分屏视图已关闭
 splitview-same-pdf-loaded = 同文件分屏已加载
 splitview-sync-position = 同步位置和缩放
 splitview-position-synced = 位置和缩放已同步
+splitview-open-another = 另一PDF
+splitview-swap-pdf = 交换PDF

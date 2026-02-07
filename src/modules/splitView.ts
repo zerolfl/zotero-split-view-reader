@@ -500,6 +500,33 @@ export class SplitViewFactory {
    * This should be called during plugin shutdown.
    */
   static unregisterAll() {
+    // Save view states for all active split views before cleanup.
+    // This ensures PDF page/zoom positions are preserved when Zotero closes.
+    for (const [_tabID, state] of this.stateMap.entries()) {
+      if (state.isCleaningUp) continue;
+      try {
+        let leftCurrentState: any = null;
+        let rightCurrentState: any = null;
+        try {
+          leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
+        } catch {
+          // Browser may be dead
+        }
+        try {
+          rightCurrentState = this.getCurrentViewStateFromBrowser(state.rightBrowser);
+        } catch {
+          // Browser may be dead
+        }
+        // Fire and forget - async save
+        Promise.all([
+          this.saveViewStateToDisk(state.leftItemID, leftCurrentState || state.leftViewState),
+          this.saveViewStateToDisk(state.rightItemID, rightCurrentState || state.rightViewState),
+        ]).catch(() => { /* Ignore save errors during shutdown */ });
+      } catch {
+        // Ignore errors during shutdown
+      }
+    }
+
     // Clean up all active split views
     for (const tabID of this.stateMap.keys()) {
       try {
@@ -556,7 +583,7 @@ export class SplitViewFactory {
       return;
     }
 
-    const { leftItemID, rightItemID, isSamePDF, splitRatio, syncEnabled } = savedData;
+    const { leftItemID, rightItemID, isSamePDF, splitRatio, syncEnabled, primarySide, activeSide } = savedData;
 
     // Validate items still exist
     if (!Zotero.Items.exists(leftItemID) || !Zotero.Items.exists(rightItemID)) {
@@ -598,6 +625,19 @@ export class SplitViewFactory {
           this.stopSyncPolling(tabID);
         }
       }
+
+      // Restore primary side setting (directly set state to avoid
+      // notification popup that setPrimarySide shows)
+      if (primarySide === "left" || primarySide === "right") {
+        state.primarySide = primarySide;
+        this.updateScrollbarColors(tabID);
+        // Sync polling will be started by convertToSplitView's delay timer
+      }
+
+      // Restore active side
+      if (activeSide === "left" || activeSide === "right") {
+        state.activeSide = activeSide;
+      }
     }
 
     Zotero.debug(`Split view: Successfully restored split view for tab ${tabID}`);
@@ -623,6 +663,8 @@ export class SplitViewFactory {
         isSamePDF: state.isSamePDF,
         splitRatio: state.splitRatio,
         syncEnabled: state.syncEnabled,
+        primarySide: state.primarySide,
+        activeSide: state.activeSide,
       });
     } catch (e) {
       Zotero.debug(`Split view: Failed to update tab data: ${e}`);
@@ -663,6 +705,9 @@ export class SplitViewFactory {
 
     state.primarySide = side;
 
+    // Update scrollbar colors to reflect new primary side
+    this.updateScrollbarColors(tabID);
+
     // Restart sync with new primary
     if (state.syncEnabled) {
       this.initSyncState(tabID);
@@ -678,6 +723,355 @@ export class SplitViewFactory {
       })
       .show();
     popup.startCloseTimer(2000);
+  }
+
+  /**
+   * Replace the browser element for a side to ensure fresh state
+   * @param tabID Tab ID
+   * @param side 'left' or 'right'
+   * @returns The new browser element
+   */
+  private static replaceBrowser(tabID: string, side: "left" | "right"): XULBrowserElement | null {
+    const state = this.stateMap.get(tabID);
+    if (!state) return null;
+
+    const oldBrowser = side === "left" ? state.leftBrowser : state.rightBrowser;
+    const container = oldBrowser.parentNode;
+
+    if (!container) return null;
+
+    // Create new browser element
+    const doc = oldBrowser.ownerDocument;
+    if (!doc) return null;
+    const newBrowser = doc.createXULElement("browser") as XULBrowserElement;
+
+    // Copy attributes from createReaderBrowser
+    newBrowser.setAttribute("type", "content");
+    newBrowser.setAttribute("transparent", "true");
+    newBrowser.setAttribute("src", "resource://zotero/reader/reader.html");
+
+    // Copy styles from old browser to maintain layout
+    newBrowser.className = oldBrowser.className;
+
+    // Manually copy style properties to preserve layout
+    const oldStyle = (oldBrowser as any).style;
+    (newBrowser as any).style.flex = oldStyle.flex;
+    (newBrowser as any).style.minWidth = oldStyle.minWidth;
+    (newBrowser as any).style.maxWidth = oldStyle.maxWidth;
+    (newBrowser as any).style.overflow = oldStyle.overflow;
+    (newBrowser as any).style.boxSizing = oldStyle.boxSizing;
+
+    // Remove tracked event listeners bound to the old browser before replacing it.
+    // This avoids stale references and cleanup errors when the old browser is dead.
+    state.eventListeners = state.eventListeners.filter(entry => {
+      if (entry.target === oldBrowser) {
+        try {
+          entry.target.removeEventListener(entry.type, entry.listener, entry.options);
+        } catch {
+          // Old browser may already be dead
+        }
+        return false;
+      }
+      return true;
+    });
+
+    // Replace in DOM
+    container.replaceChild(newBrowser, oldBrowser);
+
+    // Update state
+    if (side === "left") {
+      state.leftBrowser = newBrowser;
+    } else {
+      state.rightBrowser = newBrowser;
+    }
+
+    return newBrowser;
+  }
+
+  /**
+   * Select and load a new PDF in the secondary (non-primary) window
+   */
+  /**
+   * Select and load a new PDF in the specified side panel.
+   * @param tabID Tab ID
+   * @param targetSide The side where the new PDF will be loaded (based on where the user right-clicked)
+   */
+  private static async selectAndLoadPDF(tabID: string, targetSide: "left" | "right") {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+
+    // Get the current item ID for the target side
+    const currentItemID = targetSide === "left" ? state.leftItemID : state.rightItemID;
+
+    // Create a simple reader-like object for showItemPrompt
+    // showItemPrompt only needs the itemID property
+    const fakeReader = {
+      itemID: currentItemID,
+      tabID: tabID
+    };
+
+    // Show PDF selection dialog
+    const selectedPDF = await this.showItemPrompt(fakeReader);
+    if (!selectedPDF) return;
+
+    // Check if the selected PDF is the same as the currently loaded one
+    if (selectedPDF.id === currentItemID) {
+      // Same PDF - no need to reload
+      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+      })
+        .createLine({
+          text: getString("splitview-loaded"),
+          type: "default",
+        })
+        .show();
+      popup.startCloseTimer(2000);
+      return;
+    }
+
+    // Load the new PDF in the target side
+    try {
+      // Stop sync polling during reload
+      const wasSyncEnabled = state.syncEnabled;
+      if (wasSyncEnabled) {
+        this.stopSyncPolling(tabID);
+      }
+
+      // Get the view state for the new PDF
+      const newViewState = await this.getStoredViewState(selectedPDF);
+
+      // Get the appropriate popupset
+      const popupset = targetSide === "left" ? state.leftPopupset : state.rightPopupset;
+
+      // Replace the browser element to ensure a fresh state
+      // This avoids race conditions with waitForBrowserLoad on reused browsers
+      const newBrowser = this.replaceBrowser(tabID, targetSide);
+      if (!newBrowser) {
+        throw new Error("Failed to replace browser element");
+      }
+
+      // Reload the browser with the new PDF
+      const win = Zotero.getMainWindow();
+      await this.initializeReader(
+        tabID,
+        newBrowser,
+        selectedPDF,
+        popupset,
+        newViewState,
+        targetSide === "right" // isRight parameter
+      );
+
+      // Setup listeners for the new browser
+      // Use the shared focus listener method with all proper guards
+      // to prevent redundant "Section item data changed" events
+      this.setupBrowserFocusListeners(tabID, newBrowser, targetSide, win);
+      this.setupCtrlKeyListener(tabID, newBrowser);
+      this.setupZoomButtonListeners(tabID, newBrowser);
+
+      // Update state with new item ID
+      if (targetSide === "left") {
+        state.leftItemID = selectedPDF.id;
+        state.leftParentItemID = selectedPDF.parentItemID || selectedPDF.id;
+      } else {
+        state.rightItemID = selectedPDF.id;
+        state.rightParentItemID = selectedPDF.parentItemID || selectedPDF.id;
+      }
+
+      // Update isSamePDF flag
+      state.isSamePDF = state.leftItemID === state.rightItemID;
+
+      // Setup annotation sync if we are now viewing the same PDF
+      if (state.isSamePDF) {
+        this.setupAnnotationManagerSync(tabID);
+      }
+
+      // Update tab data
+      this.updateTabDataForSession(tabID);
+
+      // Update tab title
+      const Zotero_Tabs = (win as any).Zotero_Tabs;
+      const leftItem = Zotero.Items.get(state.leftItemID);
+      const rightItem = Zotero.Items.get(state.rightItemID);
+      const leftTitle = String(leftItem.getField("title") || "PDF").substring(0, 50);
+      const rightTitle = String(rightItem.getField("title") || "PDF").substring(0, 50);
+
+      if (state.isSamePDF) {
+        Zotero_Tabs.rename(tabID, `${leftTitle}`);
+      } else {
+        Zotero_Tabs.rename(tabID, `${leftTitle} | ${rightTitle}`);
+      }
+
+      // Restart sync if it was enabled
+      if (wasSyncEnabled) {
+        this.trackTimeout(state, () => {
+          const s = this.stateMap.get(tabID);
+          if (s && s.syncEnabled) {
+            this.cacheViewerContainers(tabID);
+            this.initSyncState(tabID);
+            this.startSyncPolling(tabID);
+          }
+        }, 500);
+      }
+
+      // Show success notification
+      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+      })
+        .createLine({
+          text: getString("splitview-loaded"),
+          type: "default",
+        })
+        .show();
+      popup.startCloseTimer(2000);
+    } catch (e) {
+      Zotero.debug(`Split view: Error loading PDF on ${targetSide} side: ${e}`);
+
+      // Show error notification
+      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+      })
+        .createLine({
+          text: getString("splitview-not-found"),
+          type: "error",
+        })
+        .show();
+      popup.startCloseTimer(2000);
+    }
+  }
+
+  /**
+   * Swap the PDFs between left and right panels.
+   * Recreates both browser instances with swapped items and view states.
+   * Primary and active side states follow the swap.
+   */
+  private static async swapPDFs(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+
+    try {
+      // 1. Save current view states from browsers
+      let leftCurrentState: any = null;
+      let rightCurrentState: any = null;
+      try {
+        leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
+      } catch {
+        // Browser may be dead
+      }
+      try {
+        rightCurrentState = this.getCurrentViewStateFromBrowser(state.rightBrowser);
+      } catch {
+        // Browser may be dead
+      }
+      const leftViewState = leftCurrentState || state.leftViewState;
+      const rightViewState = rightCurrentState || state.rightViewState;
+
+      // 2. Record current item IDs and parent IDs
+      const oldLeftItemID = state.leftItemID;
+      const oldRightItemID = state.rightItemID;
+      const oldLeftParentItemID = state.leftParentItemID;
+      const oldRightParentItemID = state.rightParentItemID;
+
+      // 3. Stop sync polling during swap
+      const wasSyncEnabled = state.syncEnabled;
+      if (wasSyncEnabled) {
+        this.stopSyncPolling(tabID);
+      }
+
+      // 4. Replace both browsers to get fresh instances
+      const newLeftBrowser = this.replaceBrowser(tabID, "left");
+      const newRightBrowser = this.replaceBrowser(tabID, "right");
+      if (!newLeftBrowser || !newRightBrowser) {
+        throw new Error("Failed to replace browser elements for swap");
+      }
+
+      // 5. Swap state: left gets old right, right gets old left
+      state.leftItemID = oldRightItemID;
+      state.rightItemID = oldLeftItemID;
+      state.leftParentItemID = oldRightParentItemID;
+      state.rightParentItemID = oldLeftParentItemID;
+      state.leftViewState = rightViewState;
+      state.rightViewState = leftViewState;
+
+      // 6. Primary and active sides remain unchanged (do not follow the swap)
+
+      // 7. Get items for initialization
+      const newLeftItem = Zotero.Items.get(state.leftItemID);
+      const newRightItem = Zotero.Items.get(state.rightItemID);
+      if (!newLeftItem || !newRightItem) {
+        throw new Error("Failed to get items for swap");
+      }
+
+      // 8. Initialize both readers with swapped content
+      const win = Zotero.getMainWindow();
+      await Promise.all([
+        this.initializeReader(
+          tabID, newLeftBrowser, newLeftItem,
+          state.leftPopupset, rightViewState, false // left is never isRight
+        ),
+        this.initializeReader(
+          tabID, newRightBrowser, newRightItem,
+          state.rightPopupset, leftViewState, true // right is always isRight
+        ),
+      ]);
+
+      // 9. Setup listeners for both new browsers
+      this.setupFocusListeners(tabID, newLeftBrowser, newRightBrowser, win);
+      this.setupCtrlKeyListener(tabID, newLeftBrowser);
+      this.setupCtrlKeyListener(tabID, newRightBrowser);
+      this.setupZoomButtonListeners(tabID, newLeftBrowser);
+      this.setupZoomButtonListeners(tabID, newRightBrowser);
+
+      // 10. Update scrollbar colors to reflect new primary side
+      this.updateScrollbarColors(tabID);
+
+      // 11. Update context pane for the active side
+      const activeParentItemID = state.activeSide === "left"
+        ? state.leftParentItemID
+        : state.rightParentItemID;
+      this.updateContextPane(tabID, win, activeParentItemID);
+
+      // 12. Setup annotation sync if same PDF
+      if (state.isSamePDF) {
+        this.setupAnnotationManagerSync(tabID);
+      }
+
+      // 13. Update tab data and title
+      this.updateTabDataForSession(tabID);
+
+      const Zotero_Tabs = (win as any).Zotero_Tabs;
+      const leftTitle = String(newLeftItem.getField("title") || "PDF").substring(0, 50);
+      const rightTitle = String(newRightItem.getField("title") || "PDF").substring(0, 50);
+      if (state.isSamePDF) {
+        Zotero_Tabs.rename(tabID, `${leftTitle}`);
+      } else {
+        Zotero_Tabs.rename(tabID, `${leftTitle} | ${rightTitle}`);
+      }
+
+      // 14. Restart sync if it was enabled
+      if (wasSyncEnabled) {
+        this.trackTimeout(state, () => {
+          const s = this.stateMap.get(tabID);
+          if (s && s.syncEnabled) {
+            this.cacheViewerContainers(tabID);
+            this.initSyncState(tabID);
+            this.startSyncPolling(tabID);
+          }
+        }, 500);
+      }
+
+      // Show success notification
+      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+      })
+        .createLine({
+          text: getString("splitview-loaded"), // Reuse "loaded" message for simplicity
+          type: "default",
+        })
+        .show();
+      popup.startCloseTimer(2000);
+    } catch (e) {
+      Zotero.debug(`Split view: Error swapping PDFs: ${e}`);
+    }
   }
 
   private static async handleSplitView(reader: any) {
@@ -967,6 +1361,8 @@ export class SplitViewFactory {
           this.setupZoomButtonListeners(tabID, rightBrowser);
           this.setupContextPaneObserver(tabID, win);
         }
+        // Apply scrollbar colors to indicate primary side
+        this.updateScrollbarColors(tabID);
       }, 500);
 
       // 10. Update tab data and title (include split view state for session restore)
@@ -1240,6 +1636,8 @@ export class SplitViewFactory {
           this.setupZoomButtonListeners(tabID, rightBrowser);
           this.setupContextPaneObserver(tabID, win);
         }
+        // Apply scrollbar colors to indicate primary side
+        this.updateScrollbarColors(tabID);
       }, 500);
 
       // 9. Update tab data (include split view state for session restore).
@@ -2331,6 +2729,22 @@ export class SplitViewFactory {
       });
       popup.appendChild(closeItem);
 
+      // Open Another PDF (replace PDF on the side where the user right-clicked)
+      const openAnotherItem = mainWindow.document.createXULElement("menuitem");
+      openAnotherItem.setAttribute("label", getString("splitview-open-another"));
+      openAnotherItem.addEventListener("command", async () => {
+        await this.selectAndLoadPDF(capturedTabID, currentSide);
+      });
+      popup.appendChild(openAnotherItem);
+
+      // Swap PDFs (exchange left and right PDFs)
+      const swapItem = mainWindow.document.createXULElement("menuitem");
+      swapItem.setAttribute("label", getString("splitview-swap-pdf"));
+      swapItem.addEventListener("command", async () => {
+        await this.swapPDFs(capturedTabID);
+      });
+      popup.appendChild(swapItem);
+
       // Set Primary
       const primaryItem = mainWindow.document.createXULElement("menuitem");
       primaryItem.setAttribute("label", (isPrimary ? "📌 " : "") + getString("splitview-set-primary"));
@@ -3001,6 +3415,88 @@ export class SplitViewFactory {
   }
 
   /**
+   * Inject CSS to change scrollbar color for a browser's PDF viewer.
+   * Red scrollbar indicates the primary window, gray for secondary.
+   */
+  private static injectScrollbarCSS(browser: XULBrowserElement, isPrimary: boolean) {
+    try {
+      if (!browser || !browser.contentWindow) return;
+
+      // Safety check for dead objects (prevents InvisibleToDebugger errors)
+      if (Components.utils.isDeadWrapper(browser) ||
+          Components.utils.isDeadWrapper(browser.contentWindow)) {
+        return;
+      }
+
+      const internalReader = this.getInternalReaderFromBrowser(browser);
+      if (!internalReader) return;
+
+      const primaryView = internalReader._primaryView;
+      if (!primaryView) return;
+
+      const iframe = primaryView._iframe;
+      if (!iframe || Components.utils.isDeadWrapper(iframe)) return;
+
+      const iframeWin = iframe.contentWindow;
+      if (!iframeWin || Components.utils.isDeadWrapper(iframeWin)) return;
+
+      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
+      if (Components.utils.isDeadWrapper(wrappedWin)) return;
+
+      const doc = wrappedWin.document;
+      if (!doc || Components.utils.isDeadWrapper(doc)) return;
+
+      // Remove existing scrollbar style if present
+      const existingStyle = doc.getElementById("split-view-scrollbar-style");
+      if (existingStyle && !Components.utils.isDeadWrapper(existingStyle)) {
+        existingStyle.remove();
+      }
+
+      // If strictly secondary, we want the DEFAULT style (no custom CSS).
+      if (!isPrimary) {
+        return;
+      }
+
+      // Create new style element for primary window
+      const style = doc.createElement("style");
+      style.id = "split-view-scrollbar-style";
+
+      // Use standard CSS for Firefox (Gecko)
+      // Note: In Firefox, scrollbar-color applies to the thumb AND buttons.
+      // We cannot decouple them in CSS without simulation (which causes errors).
+      style.textContent = `
+        #viewerContainer {
+          scrollbar-color: rgba(255, 0, 0, 0.6) #f0f0f0 !important;
+        }
+      `;
+
+      if (doc.head && !Components.utils.isDeadWrapper(doc.head)) {
+        doc.head.appendChild(style);
+      } else if (doc.documentElement && !Components.utils.isDeadWrapper(doc.documentElement)) {
+        doc.documentElement.appendChild(style);
+      }
+    } catch (e) {
+      Zotero.debug(`Split view: injectScrollbarCSS error: ${e}`);
+    }
+  }
+
+  /**
+   * Update scrollbar colors for both browsers based on current primary side
+   */
+  private static updateScrollbarColors(tabID: string) {
+    const state = this.stateMap.get(tabID);
+    if (!state || state.isCleaningUp) return;
+
+    try {
+      // Set red scrollbar for primary, gray for secondary
+      this.injectScrollbarCSS(state.leftBrowser, state.primarySide === "left");
+      this.injectScrollbarCSS(state.rightBrowser, state.primarySide === "right");
+    } catch (e) {
+      Zotero.debug(`Split view: updateScrollbarColors error: ${e}`);
+    }
+  }
+
+  /**
    * Set contextPaneOpen state on a browser's internal reader.
    * This controls whether the toggle button shows in the toolbar.
    *
@@ -3313,12 +3809,14 @@ export class SplitViewFactory {
   }
 
   /**
-   * Set up focus listeners for context pane switching
+   * Set up focus/click listeners for a single browser to handle context pane switching.
+   * Reusable for both initial setup and secondary PDF replacement.
+   * Includes all guard conditions to prevent redundant "Section item data changed" events.
    */
-  private static setupFocusListeners(
+  private static setupBrowserFocusListeners(
     tabID: string,
-    leftBrowser: XULBrowserElement,
-    rightBrowser: XULBrowserElement,
+    browser: XULBrowserElement,
+    side: "left" | "right",
     win: Window
   ) {
     const state = this.stateMap.get(tabID);
@@ -3326,13 +3824,16 @@ export class SplitViewFactory {
 
     const self = this;
 
-    // Helper function to handle focus change
-    const handleFocus = (side: "left" | "right") => {
+    // Handle focus change with all necessary guards
+    const handleFocus = () => {
       const s = self.stateMap.get(tabID);
       if (!s) return;
-      if (s.activeSide === side) return; // Already active
+      if (s.activeSide === side) return; // Already active - avoid redundant updates
 
       s.activeSide = side;
+
+      // Update scrollbar colors to reflect active side
+      self.updateScrollbarColors(tabID);
 
       // Skip context pane update when both sides belong to the same
       // Zotero item (same parentItemID), to avoid redundant updates
@@ -3345,15 +3846,30 @@ export class SplitViewFactory {
       self.updateContextPane(tabID, win, parentItemID);
     };
 
-    const leftClickHandler = () => handleFocus("left");
-    const rightClickHandler = () => handleFocus("right");
-    const leftFocusHandler = () => handleFocus("left");
-    const rightFocusHandler = () => handleFocus("right");
+    // IMPORTANT: Wrap handlers in setTimeout to run asynchronously.
+    // Zotero's internal reader handlers (mouse events, etc.) may be running synchronously,
+    // and accessing certain properties or layout immediately after can cause errors
+    // like "Uncaught TypeError: can't access property 'rects', pointPosition is null".
+    // By yielding to the event loop, we ensure Zotero's internal logic completes first.
+    const clickHandler = () => win.setTimeout(handleFocus, 0);
+    const focusHandler = () => win.setTimeout(handleFocus, 0);
 
-    this.trackEventListener(state, leftBrowser, "click", leftClickHandler as EventListener, true);
-    this.trackEventListener(state, rightBrowser, "click", rightClickHandler as EventListener, true);
-    this.trackEventListener(state, leftBrowser, "focus", leftFocusHandler as EventListener, true);
-    this.trackEventListener(state, rightBrowser, "focus", rightFocusHandler as EventListener, true);
+    this.trackEventListener(state, browser, "click", clickHandler as EventListener, true);
+    this.trackEventListener(state, browser, "focus", focusHandler as EventListener, true);
+  }
+
+  /**
+   * Set up focus listeners for context pane switching (both browsers).
+   * Delegates to setupBrowserFocusListeners for each side.
+   */
+  private static setupFocusListeners(
+    tabID: string,
+    leftBrowser: XULBrowserElement,
+    rightBrowser: XULBrowserElement,
+    win: Window
+  ) {
+    this.setupBrowserFocusListeners(tabID, leftBrowser, "left", win);
+    this.setupBrowserFocusListeners(tabID, rightBrowser, "right", win);
   }
 
   /**
