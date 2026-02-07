@@ -97,6 +97,25 @@ export class SplitViewFactory {
   }
 
   /**
+   * Build a chrome:// URI for an icon bundled with this addon
+   */
+  private static getIconURI(name: string): string {
+    return `chrome://${addon.data.config.addonRef}/content/icons/${name}`;
+  }
+
+  /**
+   * Apply an icon to a XUL menuitem element (menuitem-iconic style)
+   */
+  private static setMenuItemIcon(menuitem: Element, iconURI: string) {
+    menuitem.classList.add("menuitem-iconic");
+    menuitem.setAttribute("image", iconURI);
+    menuitem.setAttribute(
+      "style",
+      "-moz-context-properties: fill; fill: currentColor;",
+    );
+  }
+
+  /**
    * Register an event listener and track it for cleanup
    */
   private static trackEventListener(
@@ -370,21 +389,28 @@ export class SplitViewFactory {
         const tabState = this.stateMap.get(readerTabID);
         const isInSplitView = !!tabState && !tabState.isCleaningUp;
 
+        // Determine icon for the Split-View Reader toggle
+        const splitViewIcon = isInSplitView
+          ? this.getIconURI("do_not_splitscreen_vertical_24dp.svg")
+          : this.getIconURI("splitscreen_vertical_add_24dp.svg");
+
+        // Build a label-to-icon map for post-processing
+        const iconMap: Record<string, string> = {
+          [getString("splitview-menu-label")]: splitViewIcon,
+        };
+
         const menuItems: any[] = [];
 
-        // First item: "Split-View Reader" toggle
+        // First item: "Split-View Reader" toggle (no checked — icon conveys state)
         menuItems.push({
           label: getString("splitview-menu-label"),
-          checked: isInSplitView,
           onCommand: () => {
             // Re-check state at command time to avoid stale references
             const currentTabState = this.stateMap.get(readerTabID);
             const currentlyInSplitView = !!currentTabState && !currentTabState.isCleaningUp;
             if (currentlyInSplitView) {
-              // Uncheck = close split view, keep the focused reader
               this.revertToSingleReader(readerTabID);
             } else {
-              // Check = open split view
               this.handleSplitView(reader);
             }
           },
@@ -395,11 +421,9 @@ export class SplitViewFactory {
           // Determine which side this reader is on
           const currentSide = this.getReaderSide(readerTabID, reader as any);
 
-          // Second item: "Primary Window" with native checkmark
-          const isPrimary = currentSide && tabState.primarySide === currentSide;
+          // Second item: "Primary Window" (icon replaces checkmark)
           menuItems.push({
             label: getString("splitview-set-primary"),
-            checked: isPrimary,
             onCommand: () => {
               // Re-check state at command time
               const s = this.stateMap.get(readerTabID);
@@ -408,9 +432,50 @@ export class SplitViewFactory {
               }
             },
           });
+          iconMap[getString("splitview-set-primary")] = this.getIconURI(
+            "primary_window_24dp.svg",
+          );
         }
 
         (append as any)(...menuItems);
+
+        // Post-process: Zotero's _openContextMenu doesn't support custom icon
+        // properties, so we add a one-time popupshowing listener to find the
+        // menuitems by label and apply our icon attributes after they are
+        // rendered into the DOM.
+        const mainWindow = Zotero.getMainWindow();
+        if (mainWindow) {
+          const self = this;
+          const onPopupShowing = (e: Event) => {
+            const popup = e.target as Element;
+            if (!popup || popup.tagName?.toLowerCase() !== "menupopup") return;
+            const items = popup.querySelectorAll("menuitem");
+            let found = false;
+            for (const item of items) {
+              const label = item.getAttribute("label");
+              if (label && iconMap[label]) {
+                found = true;
+                // Remove checkbox type if Zotero added one (from checked property)
+                item.removeAttribute("type");
+                item.removeAttribute("checked");
+                self.setMenuItemIcon(item, iconMap[label]);
+              }
+            }
+            if (!found) {
+              // Not our popup — re-listen for the next one
+              mainWindow.document.addEventListener(
+                "popupshowing",
+                onPopupShowing,
+                { once: true },
+              );
+            }
+          };
+          mainWindow.document.addEventListener(
+            "popupshowing",
+            onPopupShowing,
+            { once: true },
+          );
+        }
       },
       addon.data.config.addonID,
     );
@@ -2751,20 +2816,22 @@ export class SplitViewFactory {
       // Close Split View (revert to single reader)
       const closeItem = mainWindow.document.createXULElement("menuitem");
       closeItem.setAttribute("label", getString("splitview-menu-label"));
-      closeItem.setAttribute("type", "checkbox");
-      closeItem.setAttribute("checked", "true");
+      this.setMenuItemIcon(
+        closeItem,
+        this.getIconURI("do_not_splitscreen_vertical_24dp.svg"),
+      );
       closeItem.addEventListener("command", () => {
         this.revertToSingleReader(capturedTabID);
       });
       popup.appendChild(closeItem);
 
-      // Set Primary (native checkbox, right below Split-View Reader)
+      // Set Primary (right below Split-View Reader)
       const primaryItem = mainWindow.document.createXULElement("menuitem");
       primaryItem.setAttribute("label", getString("splitview-set-primary"));
-      primaryItem.setAttribute("type", "checkbox");
-      if (isPrimary) {
-        primaryItem.setAttribute("checked", "true");
-      }
+      this.setMenuItemIcon(
+        primaryItem,
+        this.getIconURI("primary_window_24dp.svg"),
+      );
       primaryItem.addEventListener("command", () => {
         this.setPrimarySide(capturedTabID, currentSide);
       });
@@ -2773,6 +2840,10 @@ export class SplitViewFactory {
       // Open Another PDF (replace PDF on the side where the user right-clicked)
       const openAnotherItem = mainWindow.document.createXULElement("menuitem");
       openAnotherItem.setAttribute("label", getString("splitview-open-another"));
+      this.setMenuItemIcon(
+        openAnotherItem,
+        this.getIconURI("file_open_24dp.svg"),
+      );
       openAnotherItem.addEventListener("command", async () => {
         await this.selectAndLoadPDF(capturedTabID, currentSide);
       });
@@ -2781,6 +2852,10 @@ export class SplitViewFactory {
       // Swap PDFs (exchange left and right PDFs)
       const swapItem = mainWindow.document.createXULElement("menuitem");
       swapItem.setAttribute("label", getString("splitview-swap-pdf"));
+      this.setMenuItemIcon(
+        swapItem,
+        this.getIconURI("swap_horiz_24dp.svg"),
+      );
       swapItem.addEventListener("command", async () => {
         await this.swapPDFs(capturedTabID);
       });
@@ -2789,6 +2864,10 @@ export class SplitViewFactory {
       // Sync Position and Scale
       const syncPositionItem = mainWindow.document.createXULElement("menuitem");
       syncPositionItem.setAttribute("label", getString("splitview-sync-position"));
+      this.setMenuItemIcon(
+        syncPositionItem,
+        this.getIconURI("sync_24dp.svg"),
+      );
       syncPositionItem.addEventListener("command", () => {
         const s = this.stateMap.get(capturedTabID);
         if (!s) return;
