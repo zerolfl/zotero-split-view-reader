@@ -4,21 +4,21 @@
   "version": "0.0.0",
   "description": "Enables split-view for different PDFs with synchronized scrolling",
   "config": {
-    "addonName": "Zotero Multi-View Reader",
-    "addonID": "zotero-multi-view-reader@fuling.lin.at.outlook.com",
-    "addonRef": "zotero-multi-view-reader",
-    "addonInstance": "ZoteroMultiViewReader",
+    "addonName": "Split-View Reader",
+    "addonID": "zotero-split-view-reader@fuling.lin.at.outlook.com",
+    "addonRef": "zotero-split-view-reader",
+    "addonInstance": "ZoteroSplitViewReader",
     "prefsPrefix": "extensions.zotero.${addonRef}"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zerolfl/zotero-multi-view-reader.git"
+    "url": "git+https://github.com/zerolfl/zotero-split-view-reader.git"
   },
   "author": "Fuling Lin",
   "bugs": {
-    "url": "https://github.com/zerolfl/zotero-multi-view-reader/issues"
+    "url": "https://github.com/zerolfl/zotero-split-view-reader/issues"
   },
-  "homepage": "https://github.com/zerolfl/zotero-multi-view-reader#readme",
+  "homepage": "https://github.com/zerolfl/zotero-split-view-reader#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
