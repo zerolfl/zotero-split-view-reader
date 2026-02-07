@@ -1,4 +1,5 @@
 import { getString } from "../utils/locale";
+import { getPref } from "../utils/prefs";
 
 /**
  * Split View Tab - Single tab with two side-by-side PDF readers.
@@ -391,27 +392,16 @@ export class SplitViewFactory {
           // Determine which side this reader is on
           const currentSide = this.getReaderSide(readerTabID, reader as any);
 
-          // Second item: "Primary Window" with 📌 if this is primary
+          // Second item: "Primary Window" with native checkmark
           const isPrimary = currentSide && tabState.primarySide === currentSide;
           menuItems.push({
-            label: (isPrimary ? "📌 " : "") + getString("splitview-set-primary"),
+            label: getString("splitview-set-primary"),
+            checked: isPrimary,
             onCommand: () => {
               // Re-check state at command time
               const s = this.stateMap.get(readerTabID);
               if (s && !s.isCleaningUp && currentSide) {
                 this.setPrimarySide(readerTabID, currentSide);
-              }
-            },
-          });
-
-          // Third item: "Scroll Sync" with 📌 if enabled
-          menuItems.push({
-            label: (tabState.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"),
-            onCommand: () => {
-              // Re-check state at command time
-              const s = this.stateMap.get(readerTabID);
-              if (s && !s.isCleaningUp) {
-                this.toggleSync(readerTabID);
               }
             },
           });
@@ -1278,7 +1268,7 @@ export class SplitViewFactory {
       rightItemID: secondaryPDF.id,
       leftParentItemID,
       rightParentItemID,
-      syncEnabled: true,
+      syncEnabled: getPref("syncEnabled") !== false,
       primarySide: "left",
       activeSide: "left",
       scrollHandler: null,
@@ -1540,7 +1530,7 @@ export class SplitViewFactory {
       rightItemID: itemID, // Same PDF
       leftParentItemID: parentItemID,
       rightParentItemID: parentItemID, // Same parent
-      syncEnabled: true,
+      syncEnabled: getPref("syncEnabled") !== false,
       primarySide: "left",
       activeSide: "left",
       scrollHandler: null,
@@ -2729,6 +2719,18 @@ export class SplitViewFactory {
       });
       popup.appendChild(closeItem);
 
+      // Set Primary (native checkbox, right below Split-View Reader)
+      const primaryItem = mainWindow.document.createXULElement("menuitem");
+      primaryItem.setAttribute("label", getString("splitview-set-primary"));
+      primaryItem.setAttribute("type", "checkbox");
+      if (isPrimary) {
+        primaryItem.setAttribute("checked", "true");
+      }
+      primaryItem.addEventListener("command", () => {
+        this.setPrimarySide(capturedTabID, currentSide);
+      });
+      popup.appendChild(primaryItem);
+
       // Open Another PDF (replace PDF on the side where the user right-clicked)
       const openAnotherItem = mainWindow.document.createXULElement("menuitem");
       openAnotherItem.setAttribute("label", getString("splitview-open-another"));
@@ -2744,22 +2746,6 @@ export class SplitViewFactory {
         await this.swapPDFs(capturedTabID);
       });
       popup.appendChild(swapItem);
-
-      // Set Primary
-      const primaryItem = mainWindow.document.createXULElement("menuitem");
-      primaryItem.setAttribute("label", (isPrimary ? "📌 " : "") + getString("splitview-set-primary"));
-      primaryItem.addEventListener("command", () => {
-        this.setPrimarySide(capturedTabID, currentSide);
-      });
-      popup.appendChild(primaryItem);
-
-      // Toggle Sync
-      const syncItem = mainWindow.document.createXULElement("menuitem");
-      syncItem.setAttribute("label", (ownerState.syncEnabled ? "📌 " : "") + getString("splitview-sync-actions"));
-      syncItem.addEventListener("command", () => {
-        this.toggleSync(capturedTabID);
-      });
-      popup.appendChild(syncItem);
 
       // Sync Position and Scale
       const syncPositionItem = mainWindow.document.createXULElement("menuitem");
@@ -3463,10 +3449,13 @@ export class SplitViewFactory {
 
       // Use standard CSS for Firefox (Gecko)
       // Note: In Firefox, scrollbar-color applies to the thumb AND buttons.
-      // We cannot decouple them in CSS without simulation (which causes errors).
+      // Read RGB values from preferences (fallback to red if not set)
+      const r = getPref("primaryScrollbarR") ?? 255;
+      const g = getPref("primaryScrollbarG") ?? 0;
+      const b = getPref("primaryScrollbarB") ?? 0;
       style.textContent = `
         #viewerContainer {
-          scrollbar-color: rgba(255, 0, 0, 0.6) #f0f0f0 !important;
+          scrollbar-color: rgba(${r}, ${g}, ${b}, 0.6) #f0f0f0 !important;
         }
       `;
 
@@ -3832,7 +3821,19 @@ export class SplitViewFactory {
 
       s.activeSide = side;
 
-      // Update scrollbar colors to reflect active side
+      // Auto-switch primary when followFocusPrimary preference is enabled.
+      // Directly set state to avoid notification popup from setPrimarySide().
+      if (getPref("followFocusPrimary") && s.primarySide !== side) {
+        s.primarySide = side;
+        // Restart sync with new primary if enabled
+        if (s.syncEnabled) {
+          self.stopSyncPolling(tabID);
+          self.initSyncState(tabID);
+          self.startSyncPolling(tabID);
+        }
+      }
+
+      // Update scrollbar colors to reflect active/primary side
       self.updateScrollbarColors(tabID);
 
       // Skip context pane update when both sides belong to the same

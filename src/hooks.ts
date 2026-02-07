@@ -1,9 +1,9 @@
 import {
   BasicExampleFactory,
-  HelperExampleFactory,
-  KeyExampleFactory,
-  PromptExampleFactory,
-  UIExampleFactory,
+  // HelperExampleFactory,
+  // KeyExampleFactory,
+  // PromptExampleFactory,
+  // UIExampleFactory,
 } from "./modules/examples";
 import { SplitViewFactory } from "./modules/splitView";
 import { getString, initLocale } from "./utils/locale";
@@ -27,17 +27,13 @@ async function onStartup() {
 
   BasicExampleFactory.registerNotifier();
 
-  KeyExampleFactory.registerShortcuts();
-
-  await UIExampleFactory.registerExtraColumn();
-
-  await UIExampleFactory.registerExtraColumnWithCustomCell();
-
-  UIExampleFactory.registerItemPaneCustomInfoRow();
-
-  UIExampleFactory.registerItemPaneSection();
-
-  UIExampleFactory.registerReaderItemPaneSection();
+  // Example code - commented out for Split-View Reader plugin
+  // KeyExampleFactory.registerShortcuts();
+  // await UIExampleFactory.registerExtraColumn();
+  // await UIExampleFactory.registerExtraColumnWithCustomCell();
+  // UIExampleFactory.registerItemPaneCustomInfoRow();
+  // UIExampleFactory.registerItemPaneSection();
+  // UIExampleFactory.registerReaderItemPaneSection();
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -67,35 +63,20 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     })
     .show();
 
-  await Zotero.Promise.delay(1000);
-  popupWin.changeLine({
-    progress: 30,
-    text: `[30%] ${getString("startup-begin")}`,
-  });
-
-  UIExampleFactory.registerStyleSheet(win);
-
-  UIExampleFactory.registerRightClickMenuItem();
-
-  UIExampleFactory.registerRightClickMenuPopup(win);
-
-  UIExampleFactory.registerWindowMenuWithSeparator();
-
-  PromptExampleFactory.registerNormalCommandExample();
-
-  PromptExampleFactory.registerAnonymousCommandExample(win);
-
-  PromptExampleFactory.registerConditionalCommandExample();
-
-  await Zotero.Promise.delay(1000);
+  // Example code - commented out for Split-View Reader plugin
+  // UIExampleFactory.registerStyleSheet(win);
+  // UIExampleFactory.registerRightClickMenuItem();
+  // UIExampleFactory.registerRightClickMenuPopup(win);
+  // UIExampleFactory.registerWindowMenuWithSeparator();
+  // PromptExampleFactory.registerNormalCommandExample();
+  // PromptExampleFactory.registerAnonymousCommandExample(win);
+  // PromptExampleFactory.registerConditionalCommandExample();
 
   popupWin.changeLine({
     progress: 100,
     text: `[100%] ${getString("startup-finish")}`,
   });
-  popupWin.startCloseTimer(5000);
-
-  addon.hooks.onDialogEvents("dialogExample");
+  popupWin.startCloseTimer(3000);
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
@@ -120,8 +101,7 @@ function onShutdown(): void {
 }
 
 /**
- * This function is just an example of dispatcher for Notify events.
- * Any operations should be placed in a function to keep this funcion clear.
+ * Dispatcher for Notify events.
  */
 async function onNotify(
   event: string,
@@ -129,22 +109,19 @@ async function onNotify(
   ids: Array<string | number>,
   extraData: { [key: string]: any },
 ) {
-  // You can add your code to the corresponding notify type
   ztoolkit.log("notify", event, type, ids, extraData);
-  if (
-    event == "select" &&
-    type == "tab" &&
-    extraData[ids[0]].type == "reader"
-  ) {
-    BasicExampleFactory.exampleNotifierCallback();
-  } else {
-    return;
-  }
+  // Example code - commented out for Split-View Reader plugin
+  // if (
+  //   event == "select" &&
+  //   type == "tab" &&
+  //   extraData[ids[0]].type == "reader"
+  // ) {
+  //   BasicExampleFactory.exampleNotifierCallback();
+  // }
 }
 
 /**
- * This function is just an example of dispatcher for Preference UI events.
- * Any operations should be placed in a function to keep this funcion clear.
+ * Dispatcher for Preference UI events.
  * @param type event type
  * @param data event data
  */
@@ -158,40 +135,10 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   }
 }
 
-function onShortcuts(type: string) {
-  switch (type) {
-    case "larger":
-      KeyExampleFactory.exampleShortcutLargerCallback();
-      break;
-    case "smaller":
-      KeyExampleFactory.exampleShortcutSmallerCallback();
-      break;
-    default:
-      break;
-  }
-}
-
-function onDialogEvents(type: string) {
-  switch (type) {
-    case "dialogExample":
-      HelperExampleFactory.dialogExample();
-      break;
-    case "clipboardExample":
-      HelperExampleFactory.clipboardExample();
-      break;
-    case "filePickerExample":
-      HelperExampleFactory.filePickerExample();
-      break;
-    case "progressWindowExample":
-      HelperExampleFactory.progressWindowExample();
-      break;
-    case "vtableExample":
-      HelperExampleFactory.vtableExample();
-      break;
-    default:
-      break;
-  }
-}
+// Stub functions retained so examples.ts references still compile.
+// These are no-ops for the Split-View Reader plugin.
+function onShortcuts(_type: string) {}
+function onDialogEvents(_type: string) {}
 
 // Add your hooks here. For element click, etc.
 // Keep in mind hooks only do dispatch. Don't add code that does real jobs in hooks.
