@@ -1,3 +1,4 @@
+import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { getPref } from "../utils/prefs";
 
@@ -64,6 +65,9 @@ interface SplitTabState {
   resizeTimerId: number | null;
 }
 
+/** Command id for the Split-View Reader prompt command; used for unregister to avoid leaks. */
+const SPLIT_VIEW_PROMPT_COMMAND_ID = "split-view-reader";
+
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
@@ -71,6 +75,10 @@ export class SplitViewFactory {
   private static globalTabNotifierID: string | null = null;
   /** Session restore notifier ID - for detecting tabs that need split view restoration */
   private static sessionRestoreNotifierID: string | null = null;
+  /** Preference observer ID for syncEnabled - allows real-time pref changes */
+  private static syncPrefObserverID: symbol | null = null;
+  /** Preference observer IDs for scrollbar RGB - apply new color to open split view tabs */
+  private static scrollbarPrefObserverIDs: (symbol | null)[] = [null, null, null];
 
   /**
    * Look up state for a specific tab
@@ -506,7 +514,13 @@ export class SplitViewFactory {
       // 2. If not found, check our split view states for right-side items
       for (const state of self.stateMap.values()) {
         if (state.rightItemID === itemID && !state.isCleaningUp) {
-          return state.tabID;
+          // Verify the tab still exists in Zotero's _tabs array before returning.
+          // The tab may have been closed (removed from _tabs) but our cleanup
+          // notifier hasn't fired yet, leaving stale state in stateMap.
+          const { tab } = this._getTab(state.tabID);
+          if (tab) {
+            return state.tabID;
+          }
         }
       }
 
@@ -551,6 +565,91 @@ export class SplitViewFactory {
     this.sessionRestoreNotifierID = Zotero.Notifier.registerObserver(
       notifierCallback, ["tab"], "splitViewSessionRestore", 25
     );
+  }
+
+  /**
+   * Register preference observers so that changes in the preference panel
+   * take effect immediately on all existing split view tabs.
+   */
+  static registerPrefObservers() {
+    const prefix = config.prefsPrefix;
+
+    // syncEnabled: start/stop sync on existing tabs
+    this.syncPrefObserverID = Zotero.Prefs.registerObserver(
+      `${prefix}.syncEnabled`,
+      (value: boolean) => {
+        const enabled = value !== false;
+        for (const [tabID, state] of this.stateMap.entries()) {
+          if (state.isCleaningUp) continue;
+          if (state.syncEnabled === enabled) continue;
+
+          state.syncEnabled = enabled;
+          if (enabled) {
+            this.initSyncState(tabID);
+            this.startSyncPolling(tabID);
+          } else {
+            this.stopSyncPolling(tabID);
+            state.lastPrimaryScroll = null;
+          }
+          this.updateTabDataForSession(tabID);
+        }
+      },
+      true,
+    );
+
+    // primaryScrollbarR/G/B: re-apply scrollbar color to all split view tabs
+    const scrollbarPrefKeys: (keyof _ZoteroTypes.Prefs["PluginPrefsMap"])[] = [
+      "primaryScrollbarR",
+      "primaryScrollbarG",
+      "primaryScrollbarB",
+    ];
+    const onScrollbarPrefChange = () => {
+      for (const tabID of this.stateMap.keys()) {
+        this.updateScrollbarColors(tabID);
+      }
+    };
+    scrollbarPrefKeys.forEach((key, i) => {
+      const id = Zotero.Prefs.registerObserver(
+        `${prefix}.${key}`,
+        onScrollbarPrefChange,
+        true,
+      );
+      this.scrollbarPrefObserverIDs[i] = id;
+    });
+  }
+
+  /**
+   * Register a named command in the Shift+P command palette.
+   * Context-aware: in a reader tab it starts the split view flow immediately;
+   * in the library or any other tab it enters the two-step PDF selection flow.
+   */
+  static registerPromptCommands() {
+    ztoolkit.Prompt.register([
+      {
+        id: SPLIT_VIEW_PROMPT_COMMAND_ID,
+        name: getString("splitview-command-label"),
+        label: "Split-View Reader",
+        callback: async (prompt) => {
+          const win = Zotero.getMainWindow();
+          const Zotero_Tabs = (win as any).Zotero_Tabs;
+          const selectedTabID = Zotero_Tabs?.selectedID;
+          const reader = selectedTabID
+            ? Zotero.Reader.getByTabID(selectedTabID)
+            : null;
+
+          // Hide the command palette before proceeding
+          prompt.promptNode.style.display = "none";
+
+          if (reader) {
+            // We are inside a reader tab – start split view with this PDF on the left
+            await this.handleSplitView(reader);
+          } else {
+            // Library or other non-reader tab – two-step flow
+            await this.openSplitViewFromLibrary();
+          }
+        },
+      },
+    ]);
   }
 
   /**
@@ -613,6 +712,55 @@ export class SplitViewFactory {
         Zotero.debug(`Split view: unregisterAll - unregisterObserver(globalTab) failed: ${e}`);
       }
       this.globalTabNotifierID = null;
+    }
+
+    // Unregister preference observers (sync + scrollbar color)
+    if (this.syncPrefObserverID) {
+      try {
+        Zotero.Prefs.unregisterObserver(this.syncPrefObserverID);
+      } catch (e) {
+        Zotero.debug(`Split view: unregisterAll - unregisterObserver(syncPref) failed: ${e}`);
+      }
+      this.syncPrefObserverID = null;
+    }
+    this.scrollbarPrefObserverIDs.forEach((id, i) => {
+      if (id) {
+        try {
+          Zotero.Prefs.unregisterObserver(id);
+        } catch (e) {
+          Zotero.debug(`Split view: unregisterAll - unregisterObserver(scrollbarPref[${i}]) failed: ${e}`);
+        }
+        this.scrollbarPrefObserverIDs[i] = null;
+      }
+    });
+
+    // Restore Zotero_Tabs.getTabIDByItemID to avoid holding references and stale tab IDs
+    this.unregisterTabLookup();
+
+    // Unregister our command so Prompt no longer holds our callback
+    try {
+      ztoolkit.Prompt.unregister(SPLIT_VIEW_PROMPT_COMMAND_ID);
+    } catch (e) {
+      Zotero.debug(`Split view: unregisterAll - Prompt.unregister failed: ${e}`);
+    }
+  }
+
+  /**
+   * Restore original Zotero_Tabs.getTabIDByItemID. Call on plugin unload to avoid
+   * holding references to stateMap and to prevent returning stale tab IDs.
+   */
+  private static unregisterTabLookup() {
+    try {
+      const win = Zotero.getMainWindow();
+      const Zotero_Tabs = (win as any).Zotero_Tabs;
+      if (!Zotero_Tabs) return;
+      const original = (Zotero_Tabs as any)._originalGetTabIDByItemID;
+      if (typeof original === "function") {
+        Zotero_Tabs.getTabIDByItemID = original;
+        (Zotero_Tabs as any)._originalGetTabIDByItemID = undefined;
+      }
+    } catch (e) {
+      Zotero.debug(`Split view: unregisterTabLookup failed: ${e}`);
     }
   }
 
@@ -881,16 +1029,10 @@ export class SplitViewFactory {
 
     // Get the current item ID for the target side
     const currentItemID = targetSide === "left" ? state.leftItemID : state.rightItemID;
-
-    // Create a simple reader-like object for showItemPrompt
-    // showItemPrompt only needs the itemID property
-    const fakeReader = {
-      itemID: currentItemID,
-      tabID: tabID
-    };
+    const currentItem = Zotero.Items.get(currentItemID);
 
     // Show PDF selection dialog
-    const selectedPDF = await this.showItemPrompt(fakeReader);
+    const selectedPDF = await this.showItemPrompt(currentItem.libraryID);
     if (!selectedPDF) return;
 
     // Check if the selected PDF is the same as the currently loaded one
@@ -1165,7 +1307,8 @@ export class SplitViewFactory {
       // Wait a bit for cleanup to complete
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      const selectedPDF = await this.showItemPrompt(reader);
+      const currentItem = Zotero.Items.get(reader.itemID);
+      const selectedPDF = await this.showItemPrompt(currentItem.libraryID);
       if (!selectedPDF) return;
 
       // Check if same PDF
@@ -4244,6 +4387,45 @@ export class SplitViewFactory {
   // - cleanupTab(tabID): saves state + cleans up resources for a specific tab
   // - cleanupTabResources(tabID): cleans up resources only (no state save)
 
+  // === Library-mode split view (open from Shift+P without an active reader) ===
+
+  /**
+   * Open split view from the library / non-reader context.
+   * Two-step flow: select first PDF → open it → select second PDF → split view.
+   * If the user cancels the second selection, the first PDF stays open as a normal tab.
+   */
+  private static async openSplitViewFromLibrary() {
+    // Step 1: select the first PDF (left side)
+    const firstPDF = await this.showItemPrompt(
+      undefined,
+      getString("splitview-select-first-pdf"),
+    );
+    if (!firstPDF) return;
+
+    // Open the first PDF in a new reader tab
+    const reader = await Zotero.Reader.open(firstPDF.id);
+    if (!reader) return;
+
+    // Wait for the reader to fully initialise
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Step 2: select the second PDF (right side)
+    const secondPDF = await this.showItemPrompt(
+      firstPDF.libraryID,
+      getString("splitview-select-second-pdf"),
+    );
+    if (!secondPDF) return; // User cancelled – leave the single PDF open
+
+    // Check if same PDF
+    const isSamePDF = secondPDF.id === reader.itemID;
+
+    if (isSamePDF) {
+      await this.convertToSamePDFSplitView(reader);
+    } else {
+      await this.convertToSplitView(reader, secondPDF);
+    }
+  }
+
   // === PDF selector UI methods (retained from original) ===
 
   private static getPDFAttachments(item: Zotero.Item): Zotero.Item[] {
@@ -4281,32 +4463,240 @@ export class SplitViewFactory {
     return parts.join(", ");
   }
 
-  private static showItemPrompt(reader: any): Promise<Zotero.Item | null> {
+  private static showItemPrompt(libraryID?: number, placeholder?: string): Promise<Zotero.Item | null> {
     return new Promise((resolve) => {
-      const currentItemID = reader.itemID;
-      const currentItem = Zotero.Items.get(currentItemID);
-      const libraryID = currentItem.libraryID;
       let resolved = false;
+      let searchTimer: number | null = null;
 
-      const finish = (item: Zotero.Item | null) => {
-        if (resolved) return;
-        resolved = true;
-        ztoolkit.Prompt.unregister("split-view-item-selector");
-        resolve(item);
-      };
+      // Track PDF sub-list state so we can filter PDFs by title
+      let currentPDFs: Zotero.Item[] | null = null;
+      let currentParentItem: Zotero.Item | null = null;
 
       const win = Zotero.getMainWindow();
       const promptInstance = ztoolkit.Prompt.prompt;
       const { promptNode } = promptInstance;
 
-      const buildItemList = (prompt: any, items: Zotero.Item[]) => {
-        if (items.length === 0) {
-          prompt.showTip(getString("splitview-not-found"));
+      // Save original Prompt methods so we can restore them in finish()
+      const origShowSuggestions = (promptInstance as any).showSuggestions
+        .bind(promptInstance);
+      const origExit = (promptInstance as any).exit.bind(promptInstance);
+
+      // MutationObserver to detect external close (click outside, etc.)
+      const observer = new win.MutationObserver(() => {
+        if (promptNode.style.display === "none") {
+          finish(null);
+        }
+      });
+
+      // Helper: count current containers
+      const getContainers = () =>
+        promptNode.querySelectorAll(
+          ".commands-containers .commands-container",
+        );
+
+      // Helper: remove all containers except the base (index 0)
+      const removeContainersAboveBase = () => {
+        const all = getContainers();
+        for (let i = all.length - 1; i >= 1; i--) {
+          all[i].remove();
+        }
+      };
+
+      // ------------------------------------------------------------------
+      // finish() – single exit point; restore toolkit state first to avoid
+      // re-entrancy, then clear timers/observer, DOM, and refs to allow GC.
+      // ------------------------------------------------------------------
+      const finish = (item: Zotero.Item | null) => {
+        if (resolved) return;
+        resolved = true;
+
+        // 1. Restore original prompt methods so toolkit no longer holds our overrides
+        (promptInstance as any).showSuggestions = origShowSuggestions;
+        (promptInstance as any).exit = origExit;
+
+        // 2. Stop observing and clear debounce timer so callbacks never run after this
+        observer.disconnect();
+        if (searchTimer != null) {
+          win.clearTimeout(searchTimer);
+          searchTimer = null;
+        }
+
+        // 3. Reset DOM: one empty base so next Shift+P shows command list
+        promptNode.querySelectorAll(".commands-container")
+          .forEach((e: Element) => e.remove());
+        promptInstance.createCommandsContainer();
+
+        // 4. Clear input and PDF state so nothing holds references
+        promptInstance.inputNode.value = "";
+        (promptInstance as any).lastInputText = "";
+        currentPDFs = null;
+        currentParentItem = null;
+
+        // 5. Hide prompt and resolve
+        if (promptNode.style.display !== "none") {
+          promptNode.style.display = "none";
+        }
+        resolve(item);
+      };
+
+      // ------------------------------------------------------------------
+      // doSearch() – item search; removes old item container, rebuilds
+      // ------------------------------------------------------------------
+      const doSearch = async (text: string) => {
+        if (resolved) return;
+        const s = new Zotero.Search();
+        if (libraryID !== undefined) {
+          s.addCondition("libraryID", "is", String(libraryID));
+        }
+        s.addCondition("itemType", "isNot", "attachment");
+        s.addCondition("itemType", "isNot", "note");
+        if (text.trim()) {
+          s.addCondition("quicksearch-titleCreatorYear", "contains", text);
+        }
+        const ids = await s.search();
+        if (resolved) return;
+        const itemsWithPDF: Zotero.Item[] = [];
+        for (const id of ids) {
+          const item = Zotero.Items.get(id);
+          if (!item || !item.isRegularItem()) continue;
+          if (this.getPDFAttachments(item).length > 0) {
+            itemsWithPDF.push(item);
+          }
+          if (itemsWithPDF.length >= 30) break;
+        }
+
+        // Remove all containers above the base before rebuilding
+        removeContainersAboveBase();
+        buildItemList(promptInstance, itemsWithPDF);
+      };
+
+      // ------------------------------------------------------------------
+      // doPDFSearch() – filter stored PDFs by title, rebuild PDF container
+      // ------------------------------------------------------------------
+      const doPDFSearch = (text: string) => {
+        if (resolved || !currentPDFs || !currentParentItem) return;
+
+        const filtered = text.trim()
+          ? currentPDFs.filter((pdf: Zotero.Item) => {
+              const title = String(
+                pdf.getField("title") ||
+                  (pdf as any).attachmentFilename ||
+                  "",
+              );
+              return title.toLowerCase().includes(text.toLowerCase());
+            })
+          : currentPDFs;
+
+        // Remove existing PDF container (the last one, beyond base + items)
+        const all = getContainers();
+        if (all.length >= 3) {
+          all[all.length - 1].remove();
+        }
+
+        buildPDFList(promptInstance, filtered, currentParentItem);
+      };
+
+      // ------------------------------------------------------------------
+      // Override showSuggestions – replaces the toolkit's fuzzy-match logic
+      // that would crash on our custom elements (no .name span).
+      // Supports search in BOTH item list and PDF list.
+      // ------------------------------------------------------------------
+      (promptInstance as any).showSuggestions = async (inputText: string) => {
+        if (resolved) return origShowSuggestions(inputText);
+
+        if (searchTimer) win.clearTimeout(searchTimer);
+
+        if (currentPDFs !== null) {
+          // ----- In PDF sub-list: filter PDFs by title -----
+          if (inputText.trim() === "") {
+            doPDFSearch("");
+            return;
+          }
+          searchTimer = win.setTimeout(() => {
+            if (!resolved) doPDFSearch(inputText);
+          }, 200) as unknown as number;
+        } else {
+          // ----- In item list: search items by keyword -----
+          if (inputText.trim() === "") {
+            doSearch("");
+            return;
+          }
+          searchTimer = win.setTimeout(() => {
+            if (!resolved) doSearch(inputText);
+          }, 300) as unknown as number;
+        }
+      };
+
+      // ------------------------------------------------------------------
+      // Override exit – Esc always goes back one level:
+      //   PDF list → item list → command list → close prompt
+      // ------------------------------------------------------------------
+      (promptInstance as any).exit = () => {
+        if (resolved) return origExit();
+
+        const containers = getContainers();
+
+        if (currentPDFs !== null) {
+          // In PDF sub-list: pop back to item list (toolkit's exit shows previous container)
+          if (containers.length >= 3) {
+            origExit();
+          }
+          currentPDFs = null;
+          currentParentItem = null;
+          promptInstance.inputNode.value = "";
+          (promptInstance as any).lastInputText = "";
+          promptInstance.inputNode.placeholder =
+            placeholder || getString("splitview-select-pdf");
+          promptInstance.inputNode.focus();
           return;
         }
 
+        if (containers.length >= 2) {
+          // In item list: pop back to command list, then repopulate with commands
+          origExit();
+          promptInstance.showCommands(promptInstance.commands, true);
+          promptInstance.inputNode.value = "";
+          (promptInstance as any).lastInputText = "";
+          promptInstance.inputNode.focus();
+          return;
+        }
+
+        // Only base (or command list): close prompt entirely
+        finish(null);
+      };
+
+      // ------------------------------------------------------------------
+      // buildItemList / buildPDFList – UI builders
+      // ------------------------------------------------------------------
+      const buildItemList = (prompt: any, items: Zotero.Item[]) => {
+        if (resolved) return;
+
         const container = prompt.createCommandsContainer();
         container.classList.add("suggestions");
+
+        if (items.length === 0) {
+          // Show "not found" as a non-interactive element inside the container
+          const ele = ztoolkit.UI.createElement(win.document, "div", {
+            namespace: "html",
+            classList: ["command"],
+            styles: {
+              opacity: "0.5",
+              padding: "8px",
+              textAlign: "center",
+              cursor: "default",
+            },
+            children: [
+              {
+                tag: "span",
+                properties: {
+                  innerText: getString("splitview-not-found"),
+                },
+              },
+            ],
+          });
+          container.appendChild(ele);
+          return;
+        }
 
         items.slice(0, 30).forEach((item: Zotero.Item) => {
           const title = String(item.getField("title") || "Untitled");
@@ -4332,9 +4722,13 @@ export class SplitViewFactory {
                     return;
                   }
                   if (pdfCount === 1) {
-                    promptNode.style.display = "none";
                     finish(pdfs[0]);
                   } else {
+                    // Enter PDF sub-list: store state and clear input
+                    currentPDFs = pdfs;
+                    currentParentItem = item;
+                    promptInstance.inputNode.value = "";
+                    (promptInstance as any).lastInputText = "";
                     buildPDFList(prompt, pdfs, item);
                   }
                 },
@@ -4376,6 +4770,10 @@ export class SplitViewFactory {
           });
           container.appendChild(ele);
         });
+
+        // Auto-select first item so that pressing Enter triggers it
+        const first = container.querySelector(".command");
+        if (first) (first as HTMLElement).classList.add("selected");
       };
 
       const buildPDFList = (
@@ -4383,8 +4781,34 @@ export class SplitViewFactory {
         pdfs: Zotero.Item[],
         parentItem: Zotero.Item,
       ) => {
+        if (resolved) return;
+
         const container = prompt.createCommandsContainer();
         container.classList.add("suggestions");
+
+        if (pdfs.length === 0) {
+          // Show "not found" for PDF filter
+          const ele = ztoolkit.UI.createElement(win.document, "div", {
+            namespace: "html",
+            classList: ["command"],
+            styles: {
+              opacity: "0.5",
+              padding: "8px",
+              textAlign: "center",
+              cursor: "default",
+            },
+            children: [
+              {
+                tag: "span",
+                properties: {
+                  innerText: getString("splitview-not-found"),
+                },
+              },
+            ],
+          });
+          container.appendChild(ele);
+          return;
+        }
 
         pdfs.forEach((pdf: Zotero.Item) => {
           const pdfTitle = String(
@@ -4406,7 +4830,6 @@ export class SplitViewFactory {
               {
                 type: "click",
                 listener: () => {
-                  promptNode.style.display = "none";
                   finish(pdf);
                 },
               },
@@ -4446,77 +4869,27 @@ export class SplitViewFactory {
           });
           container.appendChild(ele);
         });
+
+        // Auto-select first PDF so that pressing Enter triggers it
+        const first = container.querySelector(".command");
+        if (first) (first as HTMLElement).classList.add("selected");
       };
 
-      ztoolkit.Prompt.register([
-        {
-          id: "split-view-item-selector",
-          callback: async (prompt) => {
-            const text = prompt.inputNode.value;
-            prompt.showTip(getString("splitview-searching"));
-
-            const s = new Zotero.Search();
-            s.addCondition("libraryID", "is", String(libraryID));
-            s.addCondition("itemType", "isNot", "attachment");
-            s.addCondition("itemType", "isNot", "note");
-            if (text.trim()) {
-              s.addCondition(
-                "quicksearch-titleCreatorYear",
-                "contains",
-                text,
-              );
-            }
-
-            const ids = await s.search();
-            const itemsWithPDF: Zotero.Item[] = [];
-            for (const id of ids) {
-              const item = Zotero.Items.get(id);
-              if (!item || !item.isRegularItem()) continue;
-              const pdfs = this.getPDFAttachments(item);
-              if (pdfs.length > 0) {
-                itemsWithPDF.push(item);
-              }
-              if (itemsWithPDF.length >= 30) break;
-            }
-
-            buildItemList(prompt, itemsWithPDF);
-          },
-        },
-      ]);
-
+      // ------------------------------------------------------------------
+      // Show prompt with an empty base container
+      // ------------------------------------------------------------------
       promptNode.style.display = "flex";
-      promptInstance.showCommands(promptInstance.commands, true);
+      promptNode.querySelectorAll(".commands-container").forEach((e: Element) => e.remove());
+      promptInstance.createCommandsContainer();
       promptInstance.inputNode.value = "";
+      (promptInstance as any).lastInputText = "";
+      promptInstance.inputNode.placeholder =
+        placeholder || getString("splitview-select-pdf");
       promptInstance.inputNode.focus();
 
-      (async () => {
-        const s = new Zotero.Search();
-        s.addCondition("libraryID", "is", String(libraryID));
-        s.addCondition("itemType", "isNot", "attachment");
-        s.addCondition("itemType", "isNot", "note");
-        const ids = await s.search();
-        if (promptNode.style.display === "none") return;
-        if (promptInstance.inputNode.value.trim()) return;
+      // Run initial search to populate the item list
+      doSearch("");
 
-        const itemsWithPDF: Zotero.Item[] = [];
-        for (const id of ids) {
-          const item = Zotero.Items.get(id);
-          if (!item || !item.isRegularItem()) continue;
-          const pdfs = this.getPDFAttachments(item);
-          if (pdfs.length > 0) {
-            itemsWithPDF.push(item);
-          }
-          if (itemsWithPDF.length >= 30) break;
-        }
-        buildItemList(promptInstance, itemsWithPDF);
-      })();
-
-      const observer = new win.MutationObserver(() => {
-        if (promptNode.style.display === "none") {
-          observer.disconnect();
-          finish(null);
-        }
-      });
       observer.observe(promptNode, {
         attributes: true,
         attributeFilter: ["style"],

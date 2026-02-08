@@ -29,3 +29,6 @@ splitview-sync-position = 同步位置和缩放
 splitview-position-synced = 位置和缩放已同步
 splitview-open-another = 另一PDF
 splitview-swap-pdf = 交换PDF
+splitview-command-label = 分屏阅读器
+splitview-select-first-pdf = 选择第一篇 PDF（左侧）
+splitview-select-second-pdf = 选择第二篇 PDF（右侧），按 Esc 仅打开单篇

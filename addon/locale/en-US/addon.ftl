@@ -29,3 +29,6 @@ splitview-sync-position = Sync Position & Zoom
 splitview-position-synced = Position and zoom synced
 splitview-open-another = Open Another PDF
 splitview-swap-pdf = Swap PDFs
+splitview-command-label = Split View Reader
+splitview-select-first-pdf = Select first PDF (left side)
+splitview-select-second-pdf = Select second PDF (right side), Esc to open single

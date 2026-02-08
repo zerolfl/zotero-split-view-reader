@@ -6,6 +6,11 @@ const basicTool = new BasicTool();
 
 // @ts-expect-error - Plugin instance is not typed
 if (!basicTool.getGlobal("Zotero")[config.addonInstance]) {
+  // Expose `window` as a lazy global so that bundled toolkit code
+  // (e.g. Prompt.initInputEvents which uses bare `window.setTimeout`)
+  // can resolve it in the plugin's module scope.
+  defineGlobal("window", () => basicTool.getGlobal("window"));
+
   _globalThis.addon = new Addon();
   defineGlobal("ztoolkit", () => {
     return _globalThis.addon.data.ztoolkit;
