@@ -63,6 +63,8 @@ interface SplitTabState {
   scrollSyncRAFPending: boolean;
   // Resize debounce timer ID for cleanup
   resizeTimerId: number | null;
+  // Full-screen overlay during resizer drag; removed on cleanup so UI is not stuck
+  dragOverlay?: HTMLElement | null;
 }
 
 /** Command id for the Split-View Reader prompt command; used for unregister to avoid leaks. */
@@ -217,6 +219,8 @@ export class SplitViewFactory {
         overlay.remove();
         overlay = null;
       }
+      const s = self.stateMap.get(tabID);
+      if (s) s.dragOverlay = null;
       win.removeEventListener("mouseup", onMouseUp);
       win.removeEventListener("blur", onMouseUp);
       win.document.removeEventListener("mouseleave", onMouseUp);
@@ -232,6 +236,7 @@ export class SplitViewFactory {
         overlay.remove();
         overlay = null;
       }
+      state.dragOverlay = null;
       win.removeEventListener("mouseup", onMouseUp);
       win.removeEventListener("blur", onMouseUp);
       win.document.removeEventListener("mouseleave", onMouseUp);
@@ -252,15 +257,23 @@ export class SplitViewFactory {
       `;
       const target = win.document.documentElement || win.document.body;
       if (target) target.appendChild(overlay);
+      state.dragOverlay = overlay;
       overlay.addEventListener("mousemove", onMouseMove);
       overlay.addEventListener("mouseup", onMouseUp);
+      state.eventListeners.push(
+        { target: overlay, type: "mousemove", listener: onMouseMove as EventListener },
+        { target: overlay, type: "mouseup", listener: onMouseUp as EventListener },
+      );
 
       // Also listen on window in case mouseup happens outside overlay
       win.addEventListener("mouseup", onMouseUp);
-
-      // Add additional stop listeners (following Zotero's createDragHandler pattern)
       win.addEventListener("blur", onMouseUp);
       win.document.addEventListener("mouseleave", onMouseUp);
+      state.eventListeners.push(
+        { target: win, type: "mouseup", listener: onMouseUp as EventListener },
+        { target: win, type: "blur", listener: onMouseUp as EventListener },
+        { target: win.document, type: "mouseleave", listener: onMouseUp as EventListener },
+      );
 
       // Escape key to cancel drag and restore original ratio
       onKeyDown = (e: KeyboardEvent) => {
@@ -275,6 +288,12 @@ export class SplitViewFactory {
         }
       };
       win.addEventListener("keydown", onKeyDown);
+      state.eventListeners.push({
+        target: win,
+        type: "keydown",
+        listener: onKeyDown as EventListener,
+        options: true,
+      });
     };
 
     const onMouseDown = (e: MouseEvent) => {
@@ -3297,6 +3316,7 @@ export class SplitViewFactory {
     const resizeTimerId = state.resizeTimerId;
     const annotationNotifierID = state.annotationNotifierID;
     const contextPaneObserver = (state as any).contextPaneObserver;
+    const dragOverlay = state.dragOverlay;
 
     // Clear state arrays first to prevent re-entry
     state.eventListeners = [];
@@ -3306,6 +3326,7 @@ export class SplitViewFactory {
     state.rightViewerContainer = null;
     state.resizeTimerId = null;
     state.annotationNotifierID = null;
+    state.dragOverlay = null;
     (state as any).contextPaneObserver = null;
 
     // Stop sync polling before other cleanup
@@ -3340,6 +3361,15 @@ export class SplitViewFactory {
         target.removeEventListener(type, listener, options);
       } catch (e) {
         Zotero.debug(`Split view: cleanup ${tabID} - removeEventListener(${type}) failed: ${e}`);
+      }
+    }
+
+    // Remove resizer drag overlay if tab was closed during drag (restores cursor and clickability)
+    if (dragOverlay && dragOverlay.parentNode) {
+      try {
+        dragOverlay.remove();
+      } catch (e) {
+        Zotero.debug(`Split view: cleanup ${tabID} - dragOverlay.remove failed: ${e}`);
       }
     }
 
