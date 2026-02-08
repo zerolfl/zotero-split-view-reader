@@ -6,7 +6,7 @@ import {
   // UIExampleFactory,
 } from "./modules/examples";
 import { SplitViewFactory } from "./modules/splitView";
-import { getString, initLocale } from "./utils/locale";
+import { initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 
@@ -53,32 +53,6 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
-
-  const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-    closeOnClick: true,
-    closeTime: -1,
-  })
-    .createLine({
-      text: getString("startup-begin"),
-      type: "default",
-      progress: 0,
-    })
-    .show();
-
-  // Example code - commented out for Split-View Reader plugin
-  // UIExampleFactory.registerStyleSheet(win);
-  // UIExampleFactory.registerRightClickMenuItem();
-  // UIExampleFactory.registerRightClickMenuPopup(win);
-  // UIExampleFactory.registerWindowMenuWithSeparator();
-  // PromptExampleFactory.registerNormalCommandExample();
-  // PromptExampleFactory.registerAnonymousCommandExample(win);
-  // PromptExampleFactory.registerConditionalCommandExample();
-
-  popupWin.changeLine({
-    progress: 100,
-    text: `[100%] ${getString("startup-finish")}`,
-  });
-  popupWin.startCloseTimer(3000);
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {

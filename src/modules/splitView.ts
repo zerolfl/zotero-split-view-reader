@@ -8,7 +8,7 @@ import { getPref } from "../utils/prefs";
  * Features:
  * 1. Opens two PDF readers in a single Zotero tab
  * 2. Horizontal split layout with draggable splitter
- * 3. Bidirectional scroll/page sync (toggle via context menu)
+ * 3. Bidirectional scroll/page sync (preference-controlled; no context menu toggle)
  * 4. Each reader has complete annotation support
  */
 
@@ -938,16 +938,6 @@ export class SplitViewFactory {
       this.initSyncState(tabID);
       this.startSyncPolling(tabID);
     }
-
-    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-      closeOnClick: true,
-    })
-      .createLine({
-        text: getString("splitview-primary-set"),
-        type: "default",
-      })
-      .show();
-    popup.startCloseTimer(2000);
   }
 
   /**
@@ -1063,6 +1053,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-loaded"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(2000);
@@ -1125,6 +1116,10 @@ export class SplitViewFactory {
         this.setupAnnotationManagerSync(tabID);
       }
 
+      // Make the side where we opened the PDF the primary and apply scrollbar color
+      state.primarySide = targetSide;
+      this.updateScrollbarColors(tabID);
+
       // Update tab data
       this.updateTabDataForSession(tabID);
 
@@ -1160,6 +1155,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-loaded"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(2000);
@@ -1173,6 +1169,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-not-found"),
           type: "error",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(2000);
@@ -1304,8 +1301,9 @@ export class SplitViewFactory {
         closeOnClick: true,
       })
         .createLine({
-          text: getString("splitview-loaded"), // Reuse "loaded" message for simplicity
+          text: getString("splitview-swap-pdf"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(2000);
@@ -1578,6 +1576,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-loaded"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(3000);
@@ -1852,6 +1851,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-same-pdf-loaded"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(3000);
@@ -2042,6 +2042,7 @@ export class SplitViewFactory {
           ? getString("splitview-sync-enabled")
           : getString("splitview-sync-disabled"),
         type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
       })
       .show();
     popup.startCloseTimer(2000);
@@ -2182,6 +2183,7 @@ export class SplitViewFactory {
         .createLine({
           text: getString("splitview-position-synced"),
           type: "default",
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
         })
         .show();
       popup.startCloseTimer(2000);
@@ -3286,6 +3288,7 @@ export class SplitViewFactory {
       .createLine({
         text: getString("splitview-closed"),
         type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
       })
       .show();
     popup.startCloseTimer(2000);
@@ -3498,6 +3501,7 @@ export class SplitViewFactory {
       .createLine({
         text: getString("splitview-closed"),
         type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
       })
       .show();
     popup.startCloseTimer(2000);
