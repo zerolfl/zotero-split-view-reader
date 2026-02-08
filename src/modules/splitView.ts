@@ -422,21 +422,28 @@ export class SplitViewFactory {
           : this.getIconURI("splitscreen_vertical_add_24dp.svg");
 
         // Build a label-to-icon map for post-processing
+        // Use the actual label that will be shown (close or open)
+        const menuLabel = isInSplitView ? getString("splitview-close-menu-label") : getString("splitview-menu-label");
         const iconMap: Record<string, string> = {
-          [getString("splitview-menu-label")]: splitViewIcon,
+          [menuLabel]: splitViewIcon,
         };
 
         const menuItems: any[] = [];
 
-        // First item: "Split-View Reader" toggle (no checked — icon conveys state)
+        // First item: "Split-View Reader" toggle or Close
         menuItems.push({
-          label: getString("splitview-menu-label"),
+          label: menuLabel,
           onCommand: () => {
             // Re-check state at command time to avoid stale references
             const currentTabState = this.stateMap.get(readerTabID);
             const currentlyInSplitView = !!currentTabState && !currentTabState.isCleaningUp;
+
             if (currentlyInSplitView) {
-              this.revertToSingleReader(readerTabID);
+              // Use activeSide to determine which side was clicked
+              // activeSide is updated whenever user clicks/focuses on a side
+              const clickedSide = currentTabState?.activeSide || "right";
+              // Pass the side to close (the one we clicked on)
+              this.revertToSingleReader(readerTabID, clickedSide);
             } else {
               this.handleSplitView(reader);
             }
@@ -2979,13 +2986,13 @@ export class SplitViewFactory {
 
       // Close Split View (revert to single reader)
       const closeItem = mainWindow.document.createXULElement("menuitem");
-      closeItem.setAttribute("label", getString("splitview-menu-label"));
+      closeItem.setAttribute("label", getString("splitview-close-menu-label"));
       this.setMenuItemIcon(
         closeItem,
         this.getIconURI("do_not_splitscreen_vertical_24dp.svg"),
       );
       closeItem.addEventListener("command", () => {
-        this.revertToSingleReader(capturedTabID);
+        this.revertToSingleReader(capturedTabID, currentSide);
       });
       popup.appendChild(closeItem);
 
@@ -3242,8 +3249,9 @@ export class SplitViewFactory {
    * Revert split view to single reader
    * Called when user unchecks "Split-View Reader" in context menu
    * Keeps the focused reader and closes the other one
+   * @param sideToClose Optional. If provided, closes this specific side. If not, keeps active side.
    */
-  private static async revertToSingleReader(tabID: string) {
+  private static async revertToSingleReader(tabID: string, sideToClose?: "left" | "right") {
     const state = this.stateMap.get(tabID);
     if (!state || state.isCleaningUp) return;
 
@@ -3252,8 +3260,13 @@ export class SplitViewFactory {
 
     const win = Zotero.getMainWindow();
 
-    // 1. Determine which reader to keep (based on activeSide)
-    const keepLeft = state.activeSide === "left";
+    // 1. Determine which reader to keep
+    // If sideToClose is "left", we keep right. If "right", keep left.
+    // If not specified, we keep the currently active side (default behavior).
+    let keepLeft = state.activeSide === "left";
+    if (sideToClose) {
+        keepLeft = sideToClose === "right";
+    }
     const keepItemID = keepLeft ? state.leftItemID : state.rightItemID;
 
     // 2. Save current view states to disk before closing
@@ -4436,12 +4449,76 @@ export class SplitViewFactory {
     );
     if (!firstPDF) return;
 
-    // Open the first PDF in a new reader tab
-    const reader = await Zotero.Reader.open(firstPDF.id);
+    const win = Zotero.getMainWindow();
+    const Zotero_Tabs = (win as any).Zotero_Tabs;
+
+    // Check if this PDF is already open in an existing tab (including split view tabs)
+    // This handles both normal tabs and split view tabs after Zotero restart
+    let existingTabID: string | null = null;
+    let isAlreadySplitView = false;
+
+    if (Zotero_Tabs) {
+      const tabs = typeof Zotero_Tabs.getTabs === "function"
+        ? Zotero_Tabs.getTabs()
+        : (Zotero_Tabs._tabs || []);
+
+      for (const tab of tabs) {
+        // Check if tab contains this PDF as left side
+        if (tab.data?.itemID === firstPDF.id) {
+          existingTabID = tab.id;
+          // Check if this tab is already a split view (has rightItemID)
+          if (tab.data?.rightItemID) {
+            isAlreadySplitView = true;
+          }
+          break;
+        }
+        // Also check split view data for right-side PDF
+        if (tab.data?.rightItemID === firstPDF.id) {
+          existingTabID = tab.id;
+          isAlreadySplitView = true;
+          break;
+        }
+      }
+    }
+
+    // If already in a split view tab, just switch to it and return
+    if (existingTabID && isAlreadySplitView) {
+      Zotero_Tabs.select(existingTabID);
+      return;
+    }
+
+    let reader: _ZoteroTypes.ReaderInstance | null = null;
+
+    if (existingTabID) {
+      // Switch to existing tab first
+      Zotero_Tabs.select(existingTabID);
+      // Wait for tab switch and reader initialization
+      await new Promise(resolve => setTimeout(resolve, 300));
+      // Get the reader after switching
+      reader = Zotero.Reader.getByTabID(existingTabID);
+      if (!reader) {
+        // Tab might be unloaded, wait for it to load
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        reader = Zotero.Reader.getByTabID(existingTabID);
+      }
+    }
+
+    if (!reader) {
+      // Open the first PDF in a new reader tab
+      reader = await Zotero.Reader.open(firstPDF.id) || null;
+    }
+
     if (!reader) return;
 
+    // Check if this reader is already in split view mode (via stateMap)
+    if (this.stateMap.has(reader.tabID)) {
+      // Already in split view, no need to show second prompt
+      return;
+    }
+
     // Wait for the reader to fully initialise
-    await new Promise(resolve => setTimeout(resolve, 800));
+    // For unloaded tabs, we need to wait longer and ensure the reader is ready
+    await this.waitForReaderReady(reader);
 
     // Step 2: select the second PDF (right side)
     const secondPDF = await this.showItemPrompt(
@@ -4457,6 +4534,47 @@ export class SplitViewFactory {
       await this.convertToSamePDFSplitView(reader);
     } else {
       await this.convertToSplitView(reader, secondPDF);
+    }
+  }
+
+  /**
+   * Wait for a reader to be fully initialized and ready
+   * Uses Zotero's native Promise mechanisms instead of arbitrary delays
+   */
+  private static async waitForReaderReady(reader: any, maxWaitMs = 10000): Promise<void> {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), maxWaitMs)
+    );
+
+    try {
+      // Method 1: Use _initPromise if available (most reliable for basic init)
+      if (reader._initPromise) {
+        await Promise.race([reader._initPromise, timeoutPromise]);
+      }
+
+      // Method 2: Wait for _internalReader._primaryView.initializedPromise
+      // This is the pattern Zotero uses internally (see reader.js line 2039-2053)
+      const pollInterval = 10;
+      let attempts = 0;
+      const maxAttempts = maxWaitMs / pollInterval;
+
+      while (!reader._internalReader?._primaryView?._iframeWindow) {
+        if (attempts >= maxAttempts) {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        attempts++;
+      }
+
+      // Wait for the primary view's initialized promise if available
+      if (reader._internalReader?._primaryView?.initializedPromise) {
+        await Promise.race([
+          reader._internalReader._primaryView.initializedPromise,
+          timeoutPromise,
+        ]);
+      }
+    } catch {
+      // Timeout or error - reader may still be usable
     }
   }
 
@@ -4578,6 +4696,84 @@ export class SplitViewFactory {
       // ------------------------------------------------------------------
       const doSearch = async (text: string) => {
         if (resolved) return;
+
+        Zotero.debug("Split view debug: doSearch text='" + text + "'");
+
+        // If text is empty, show items for currently open PDFs
+        if (!text.trim()) {
+          const itemsWithPDF: Zotero.Item[] = [];
+          const seenAttachmentIDs = new Set<number>();
+          const seenParentIDs = new Set<number>();
+
+          // 1. Check instantiated readers (Zotero.Reader._readers)
+          const readers = (Zotero.Reader as any)._readers || [];
+          for (const reader of readers) {
+             if (reader && reader.itemID) seenAttachmentIDs.add(reader.itemID);
+          }
+
+          // 2. Check all tabs (including unloaded ones for lazy loading)
+          const win = Zotero.getMainWindow();
+          const Zotero_Tabs = (win as any).Zotero_Tabs || Zotero.getMainWindow().Zotero_Tabs;
+          if (Zotero_Tabs) {
+             // Try to get tabs array - support both Zotero 6 and 7 patterns
+             const tabs = typeof Zotero_Tabs.getTabs === 'function'
+                ? Zotero_Tabs.getTabs()
+                : (Zotero_Tabs._tabs || []);
+
+             for (const tab of tabs) {
+                // Check for reader type, including unloaded tabs after Zotero restart
+                // Types: 'reader', 'reader-unloaded', 'reader-loading'
+                const isReaderTab = tab.type === "reader" ||
+                                    tab.type === "reader-unloaded" ||
+                                    tab.type === "reader-loading" ||
+                                    tab.type?.startsWith("reader") ||
+                                    tab.mode === "reader";
+
+                if (isReaderTab && tab.data && tab.data.itemID) {
+                   seenAttachmentIDs.add(tab.data.itemID);
+                } else if (isReaderTab) {
+                   // Fallback: try to get reader if initialized
+                   const r = Zotero.Reader.getByTabID(tab.id);
+                   if (r && r.itemID) seenAttachmentIDs.add(r.itemID);
+                }
+             }
+          }
+
+          // 3. Convert Attachment IDs to Parent Items
+          for (const attachmentID of seenAttachmentIDs) {
+              const attachment = Zotero.Items.get(attachmentID);
+              // Only consider attachments with parents (regular items)
+              if (attachment && attachment.parentID) {
+                  if (!seenParentIDs.has(attachment.parentID)) {
+                      const parent = Zotero.Items.get(attachment.parentID);
+                      if (parent) {
+                          itemsWithPDF.push(parent);
+                          seenParentIDs.add(attachment.parentID);
+                      }
+                  }
+              }
+          }
+
+          removeContainersAboveBase();
+
+          if (itemsWithPDF.length === 0) {
+             // Show "no open pdf" message
+             const container = promptInstance.createCommandsContainer();
+             container.classList.add("suggestions");
+             const ele = ztoolkit.UI.createElement(win.document, "div", {
+                namespace: "html",
+                classList: ["command"],
+                styles: { opacity: "0.5", padding: "8px", textAlign: "center", cursor: "default" },
+                children: [{ tag: "span", properties: { innerText: getString("splitview-no-open-pdf") } }]
+             });
+             container.appendChild(ele);
+             return;
+          }
+
+          buildItemList(promptInstance, itemsWithPDF);
+          return;
+        }
+
         const s = new Zotero.Search();
         if (libraryID !== undefined) {
           s.addCondition("libraryID", "is", String(libraryID));
@@ -4752,7 +4948,7 @@ export class SplitViewFactory {
                 type: "click",
                 listener: () => {
                   if (pdfCount === 0) {
-                    prompt.showTip(getString("splitview-no-pdf"));
+                    prompt.showTip(getString("splitview-not-found"));
                     return;
                   }
                   if (pdfCount === 1) {
