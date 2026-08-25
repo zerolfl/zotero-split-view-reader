@@ -2,6 +2,14 @@ import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
 import {
+  calculatePageAnchoredScrollTop,
+  copyDisplaySettings,
+} from "../utils/pageSync";
+import {
+  createSplitReaderAdapter,
+  forwardReaderCustomEvent,
+} from "../utils/readerEventBridge";
+import {
   getSplitViewTabTitleForItems,
   type SplitTabsTitleMode,
 } from "../utils/splitTabTitle";
@@ -2507,7 +2515,12 @@ export class SplitViewFactory {
       }
 
       // Get the view state for the new PDF
-      const newViewState = await this.getStoredViewState(selectedPDF);
+      const otherBrowser =
+        targetSide === "left" ? state.rightBrowser : state.leftBrowser;
+      const newViewState = copyDisplaySettings(
+        this.getImmediateViewStateFromBrowser(otherBrowser),
+        await this.getStoredViewState(selectedPDF),
+      );
 
       // Get the appropriate popupset
       const popupset =
@@ -2812,7 +2825,10 @@ export class SplitViewFactory {
     const leftViewState = await this.getViewStateFromReader(currentReader);
 
     // 3. Get right PDF's stored state
-    const rightViewState = await this.getStoredViewState(secondaryPDF);
+    const rightViewState = copyDisplaySettings(
+      leftViewState,
+      await this.getStoredViewState(secondaryPDF),
+    );
 
     // 4. Close current reader (but don't close tab)
     await this.closeReaderWithoutClosingTab(currentReader);
@@ -4072,6 +4088,40 @@ export class SplitViewFactory {
     const isStacked = Zotero.Prefs.get("layout") === "stacked";
     const bottomPlaceholderHeight = isStacked ? 0 : null;
 
+    // Raw embedded readers do not normally participate in Zotero.Reader's
+    // extension event API. Forward their custom events through a lightweight
+    // ReaderInstance adapter so reader plugins can extend both split panes.
+    const readerAdapter = createSplitReaderAdapter({
+      tabID,
+      item: itemRef,
+      iframeWindow: win,
+      getInternalReader: () => self.getInternalReaderFromBrowser(browserRef),
+      addToNote: (annotations) =>
+        self.addAnnotationsToActiveNote(itemRef, annotations),
+      instanceID: `${config.addonRef}-${tabID}-${isRight ? "right" : "left"}`,
+    });
+    const customEventHandler = (event: Event) => {
+      forwardReaderCustomEvent(
+        event,
+        readerAdapter,
+        (args) =>
+          Components.utils.cloneInto(args, win, {
+            wrapReflectors: true,
+            cloneFunctions: true,
+          }),
+        (eventData) => (Zotero.Reader as any)._dispatchEvent(eventData),
+      );
+    };
+    const splitState = this.stateMap.get(tabID);
+    if (splitState) {
+      this.trackEventListener(
+        splitState,
+        win,
+        "customEvent",
+        customEventHandler,
+      );
+    }
+
     // Create internal reader config - all callbacks defined inline, clone entire object once
     const readerConfig = {
       type: "pdf",
@@ -4133,6 +4183,9 @@ export class SplitViewFactory {
       onChangeSidebarWidth: (_width: number) => {
         // No-op for split view
       },
+      onChangeSidebarView: (view: string) => {
+        Zotero.Prefs.set("reader.lastSidebarTab", view);
+      },
       onChangeViewState: (viewState: any, _primary: boolean) => {
         // Track view state for saving to disk later
         const s = self.stateMap.get(tabID);
@@ -4155,7 +4208,7 @@ export class SplitViewFactory {
           }
         }
         // Sync zoom when scale changes (toolbar zoom in/out)
-        self.handleViewStateChange(browserRef, viewState);
+        self.handleViewStateChange(tabID, browserRef, viewState);
       },
       onSaveAnnotations: async (annotations: any[], callback: () => void) => {
         await self.handleAnnotationSave(itemRef, annotations);
@@ -4164,8 +4217,8 @@ export class SplitViewFactory {
       onDeleteAnnotations: (ids: string[]) => {
         self.handleAnnotationDelete(itemRef, ids);
       },
-      onAddToNote: (_annotations: any[]) => {
-        // No-op for split view
+      onAddToNote: (annotations: any[]) => {
+        self.addAnnotationsToActiveNote(itemRef, annotations);
       },
       onOpenTagsPopup: (_id: string, _x: number, _y: number) => {
         // Tags popup not implemented for split view
@@ -5365,6 +5418,28 @@ export class SplitViewFactory {
     Zotero.debug("Split view: annotation manager sync hooks installed");
   }
 
+  /** Insert reader annotations into the note currently open in Context Pane. */
+  private static addAnnotationsToActiveNote(
+    item: Zotero.Item,
+    annotations: any[],
+  ) {
+    try {
+      const contextPane = (Zotero.getMainWindow() as any).ZoteroContextPane;
+      const editorInstance =
+        contextPane?.activeEditor?.getCurrentInstance?.();
+      if (!editorInstance) return;
+
+      const prepared = annotations.map((annotation) => ({
+        ...annotation,
+        attachmentItemID: item.id,
+      }));
+      editorInstance.focus();
+      editorInstance.insertAnnotations(prepared);
+    } catch (e) {
+      Zotero.debug(`Split view: add annotation to note failed: ${e}`);
+    }
+  }
+
   /**
    * Handle annotation save callback
    * Uses the same approach as Zotero's reader
@@ -6079,6 +6154,23 @@ export class SplitViewFactory {
 
   private static SYNC_THRESHOLD = 1;
 
+  private static getPageGeometry(
+    container: Element,
+    pageIndex: number,
+  ): { top: number; height: number } | null {
+    const page = container.querySelector(
+      `.page[data-page-number="${pageIndex + 1}"]`,
+    );
+    if (!page) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = page.getBoundingClientRect();
+    return {
+      top: (container as any).scrollTop + pageRect.top - containerRect.top,
+      height: pageRect.height,
+    };
+  }
+
   /**
    * Sync scroll position between views.
    * Called once per animation frame (via rAF) to batch scroll events.
@@ -6117,8 +6209,24 @@ export class SplitViewFactory {
         Math.abs(deltaTop) >= this.SYNC_THRESHOLD ||
         Math.abs(deltaLeft) >= this.SYNC_THRESHOLD
       ) {
-        // Single write: use scrollTo for atomic position update
-        const newTop = Math.max(0, secondaryContainer.scrollTop + deltaTop);
+        // Anchor vertical sync to the visible page instead of copying raw
+        // pixel deltas. This prevents drift when the paired PDFs use different
+        // page dimensions or margins.
+        const primaryBrowser =
+          primarySide === "left" ? state.leftBrowser : state.rightBrowser;
+        const primaryViewState =
+          this.getImmediateViewStateFromBrowser(primaryBrowser);
+        const pageIndex = Math.max(0, primaryViewState?.pageIndex ?? 0);
+        const sourcePage = this.getPageGeometry(primaryContainer, pageIndex);
+        const targetPage = this.getPageGeometry(secondaryContainer, pageIndex);
+        const newTop =
+          sourcePage && targetPage
+            ? calculatePageAnchoredScrollTop(
+                primaryTop,
+                sourcePage,
+                targetPage,
+              )
+            : Math.max(0, secondaryContainer.scrollTop + deltaTop);
         const newLeft = Math.max(0, secondaryContainer.scrollLeft + deltaLeft);
         secondaryContainer.scrollTo(newLeft, newTop);
 
@@ -6661,14 +6769,43 @@ export class SplitViewFactory {
     );
   }
 
-  /**
-   * Handle view state change (no-op, zoom sync is done via button listeners)
-   */
+  /** Sync fit/page-width modes that are changed from the scale menu. */
   private static handleViewStateChange(
-    _sourceBrowser: XULBrowserElement,
-    _viewState: any,
+    tabID: string,
+    sourceBrowser: XULBrowserElement,
+    viewState: any,
   ) {
-    // Zoom sync is handled by setupZoomButtonListeners for reliability
+    const state = this.stateMap.get(tabID);
+    const primarySide = state && this.getEffectivePrimarySide(state);
+    if (!state || !primarySide || state.syncPaused) return;
+
+    const sourceSide =
+      sourceBrowser === state.leftBrowser
+        ? "left"
+        : sourceBrowser === state.rightBrowser
+          ? "right"
+          : null;
+    if (sourceSide !== primarySide || typeof viewState?.scale !== "string") {
+      return;
+    }
+
+    const targetBrowser =
+      primarySide === "left" ? state.rightBrowser : state.leftBrowser;
+    const targetState = this.getImmediateViewStateFromBrowser(targetBrowser);
+    if (!targetState || targetState.scale === viewState.scale) return;
+
+    const targetReader = this.getInternalReaderFromBrowser(targetBrowser);
+    state.syncPaused = true;
+    void this.applyViewStateToReader(
+      targetReader,
+      copyDisplaySettings(viewState, targetState),
+    ).finally(() => {
+      const currentState = this.stateMap.get(tabID);
+      if (currentState) {
+        currentState.syncPaused = false;
+        this.initSyncState(tabID);
+      }
+    });
   }
 
   /**
