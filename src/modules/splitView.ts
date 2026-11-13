@@ -23,6 +23,7 @@ import { installCloseButton } from "../platform/readerToolbar";
 import { readerScrollbar } from "../platform/readerScrollbar";
 import { SplitReaderContextMenu } from "./splitView/readerContextMenu";
 import { SplitLibraryFlow } from "./splitView/libraryFlow";
+import { SplitLibrarySelection } from "./splitView/librarySelection";
 import { SeparateViewTargets } from "./splitView/separateViewTargets";
 import { SplitViewLifecycle } from "./splitView/lifecycle";
 import { PDFSwapService } from "./splitView/pdfSwap";
@@ -49,6 +50,7 @@ import { SplitReaderInitialization } from "./splitView/readerInitialization";
 import { SplitViewNotifications } from "./splitView/notifications";
 import { SplitReaderToolbar } from "./splitView/readerToolbar";
 import { SplitViewDelayedSetup } from "./splitView/delayedSetup";
+import { libraryPane } from "../platform/libraryPane";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -56,6 +58,14 @@ import { clearPref, getPref } from "../utils/prefs";
 export class SplitViewFactory {
   /** Per-tab split states are owned by the registry, not by the controller. */
   private static stateStore = new SplitTabStateStore();
+  private static librarySelection = new SplitLibrarySelection({
+    getState: (tabID) => this.stateStore.get(tabID) || null,
+    getParentItemID: (itemID) => {
+      const item = Zotero.Items.get(itemID);
+      return item && item.parentItemID ? item.parentItemID : null;
+    },
+    selectItem: (win, itemID) => libraryPane.selectItem(win, itemID),
+  });
   private static notifications = new SplitViewNotifications({
     getString: (key, options) =>
       options
@@ -164,7 +174,7 @@ export class SplitViewFactory {
   });
   private static tabContextMenu = new SplitTabContextMenu({
     isActiveSplitView: (id) => this.hasActiveSplitState(id),
-    showInLibrary: (id, win) => this.showInLibraryForActiveSide(id, win),
+    showInLibrary: (id, win) => this.librarySelection.showActiveItem(id, win),
   });
   private static menuPresentation = new ReaderMenuPresentation({
     getString: (key, options) =>
@@ -569,23 +579,6 @@ export class SplitViewFactory {
     return state.activeSide === "left"
       ? state.leftParentItemID
       : state.rightParentItemID;
-  }
-
-  private static getActiveItemID(state: SplitTabState): number {
-    return state.activeSide === "left" ? state.leftItemID : state.rightItemID;
-  }
-
-  private static showInLibraryForActiveSide(tabID: string, win: Window): void {
-    const state = this.stateStore.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    const itemID = this.getActiveItemID(state);
-    const item = Zotero.Items.get(itemID);
-    const targetItemID = item && item.parentItemID ? item.parentItemID : itemID;
-    const pane = (win as any).ZoteroPane_Local || (win as any).ZoteroPane;
-    if (typeof pane?.selectItem === "function") {
-      void pane.selectItem(targetItemID);
-    }
   }
 
   static refreshOpenSplitViewTabTitles(): void {
