@@ -163,6 +163,25 @@ describe("split reader integration", function () {
     }
   });
 
+  it("applies the primary scrollbar color only to the selected reader", async function () {
+    const state = await open(false);
+    const getScrollbarStyle = (browser: XULBrowserElement) => {
+      const reader = readerRuntime.getInternalReaderFromBrowser(browser);
+      const win = reader._primaryView._iframe.contentWindow;
+      const document = (win as any).wrappedJSObject?.document || win.document;
+      return document.getElementById("split-view-scrollbar-style");
+    };
+
+    assert.ok(getScrollbarStyle(state.leftBrowser));
+    assert.isNull(getScrollbarStyle(state.rightBrowser));
+    factory.setPrimarySide(state.tabID, "right");
+    assert.isNull(getScrollbarStyle(state.leftBrowser));
+    assert.ok(getScrollbarStyle(state.rightBrowser));
+    factory.setPrimarySide(state.tabID, null);
+    assert.isNull(getScrollbarStyle(state.leftBrowser));
+    assert.isNull(getScrollbarStyle(state.rightBrowser));
+  });
+
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
     const state = await open(true);
     factory.setPrimarySide(state.tabID, null);

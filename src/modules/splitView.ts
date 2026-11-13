@@ -19,6 +19,7 @@ import { SplitReadAloudCoordinator } from "./splitView/readAloudCoordinator";
 import { SplitTabTitleService } from "./splitView/tabTitles";
 import { SplitTabContextMenu } from "../platform/tabContextMenu";
 import { installCloseButton } from "../platform/readerToolbar";
+import { readerScrollbar } from "../platform/readerScrollbar";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -3034,92 +3035,6 @@ export class SplitViewFactory {
    * Inject CSS to change scrollbar color for a browser's PDF viewer.
    * Red scrollbar indicates the primary window, gray for secondary.
    */
-  private static injectScrollbarCSS(
-    browser: XULBrowserElement,
-    isPrimary: boolean,
-  ) {
-    try {
-      if (!browser || !browser.contentWindow) return;
-
-      // Safety check for dead objects (prevents InvisibleToDebugger errors)
-      if (
-        Components.utils.isDeadWrapper(browser) ||
-        Components.utils.isDeadWrapper(browser.contentWindow)
-      ) {
-        return;
-      }
-
-      const internalReader =
-        readerRuntime.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return;
-
-      const primaryView = internalReader._primaryView;
-      if (!primaryView) return;
-
-      const iframe = primaryView._iframe;
-      if (!iframe || Components.utils.isDeadWrapper(iframe)) return;
-
-      const iframeWin = iframe.contentWindow;
-      if (!iframeWin || Components.utils.isDeadWrapper(iframeWin)) return;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      if (Components.utils.isDeadWrapper(wrappedWin)) return;
-
-      const doc = wrappedWin.document;
-      if (!doc || Components.utils.isDeadWrapper(doc)) return;
-
-      const existingStyle = doc.getElementById("split-view-scrollbar-style");
-
-      // If secondary: just ensure no custom scrollbar style exists
-      if (!isPrimary) {
-        if (existingStyle && !Components.utils.isDeadWrapper(existingStyle)) {
-          existingStyle.remove();
-        }
-        return;
-      }
-
-      // Build the desired CSS content for primary window
-      const r = getPref("primaryScrollbarR") ?? 255;
-      const g = getPref("primaryScrollbarG") ?? 0;
-      const b = getPref("primaryScrollbarB") ?? 0;
-      const cssContent = `
-        #viewerContainer {
-          scrollbar-color: rgba(${r}, ${g}, ${b}, 0.6) #f0f0f0 !important;
-        }
-      `;
-
-      // Skip injection if existing style already has identical content
-      if (
-        existingStyle &&
-        !Components.utils.isDeadWrapper(existingStyle) &&
-        existingStyle.textContent === cssContent
-      ) {
-        return;
-      }
-
-      // Remove outdated style if present
-      if (existingStyle && !Components.utils.isDeadWrapper(existingStyle)) {
-        existingStyle.remove();
-      }
-
-      // Create new style element for primary window
-      const style = doc.createElement("style");
-      style.id = "split-view-scrollbar-style";
-      style.textContent = cssContent;
-
-      if (doc.head && !Components.utils.isDeadWrapper(doc.head)) {
-        doc.head.appendChild(style);
-      } else if (
-        doc.documentElement &&
-        !Components.utils.isDeadWrapper(doc.documentElement)
-      ) {
-        doc.documentElement.appendChild(style);
-      }
-    } catch (e) {
-      Zotero.debug(`Split view: injectScrollbarCSS error: ${e}`);
-    }
-  }
-
   /**
    * Update scrollbar colors for both browsers based on current primary side
    */
@@ -3130,8 +3045,21 @@ export class SplitViewFactory {
 
     try {
       // Only show a highlighted scrollbar while a primary view exists.
-      this.injectScrollbarCSS(state.leftBrowser, primarySide === "left");
-      this.injectScrollbarCSS(state.rightBrowser, primarySide === "right");
+      const color = primarySide
+        ? {
+            red: getPref("primaryScrollbarR") ?? 255,
+            green: getPref("primaryScrollbarG") ?? 0,
+            blue: getPref("primaryScrollbarB") ?? 0,
+          }
+        : null;
+      readerScrollbar.setPrimaryColor(
+        state.leftBrowser,
+        primarySide === "left" ? color : null,
+      );
+      readerScrollbar.setPrimaryColor(
+        state.rightBrowser,
+        primarySide === "right" ? color : null,
+      );
     } catch (e) {
       Zotero.debug(`Split view: updateScrollbarColors error: ${e}`);
     }
