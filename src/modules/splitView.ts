@@ -24,6 +24,7 @@ import { readerScrollbar } from "../platform/readerScrollbar";
 import { SplitReaderContextMenu } from "./splitView/readerContextMenu";
 import { SplitLibraryFlow } from "./splitView/libraryFlow";
 import { SplitLibrarySelection } from "./splitView/librarySelection";
+import { SplitCommandEntry } from "./splitView/commandEntry";
 import { SeparateViewTargets } from "./splitView/separateViewTargets";
 import { SplitViewLifecycle } from "./splitView/lifecycle";
 import { PDFSwapService } from "./splitView/pdfSwap";
@@ -202,7 +203,7 @@ export class SplitViewFactory {
       this.menuPresentation.setMenuItemIcon(item, uri),
     swapPDFs: (id) => this.swapPDFs(id),
     separateViews: (id, side) => void this.separateViews(id, side),
-    handleSplitView: (reader) => void this.handleSplitView(reader),
+    handleSplitView: (reader) => void this.readerEntryFlow.open(reader),
     revertToSingleReader: (id, side) =>
       void this.revertToSingleReader(id, side),
     setPrimarySide: (id, side) => this.primaryView.setSide(id, side),
@@ -540,6 +541,14 @@ export class SplitViewFactory {
     convertDifferentPDF: (reader, item) =>
       this.conversion.convertDifferentPDF(reader, item),
   });
+  private static commandEntry = new SplitCommandEntry({
+    getReader: (win) => {
+      const selectedID = tabsForWindow(win)?.selectedID;
+      return selectedID ? readerApi.getByTabID(selectedID) : null;
+    },
+    openReader: (reader) => this.readerEntryFlow.open(reader),
+    openLibrary: () => this.libraryFlow.open(),
+  });
   private static shutdown = new SplitViewShutdown({
     disposePDFSelector: () => this.pdfSelector.dispose(),
     unregisterReaderContextMenu: () => this.readerContextMenu.unregister(),
@@ -631,15 +640,8 @@ export class SplitViewFactory {
    * Context-aware: in a reader tab it starts the split view flow immediately;
    * in the library or any other tab it enters the two-step PDF selection flow.
    */
-  static registerPromptCommands(win: Window) {
-    commandPalette.register(win, async () => {
-      const tabs = tabsForWindow(win);
-      const reader = tabs?.selectedID
-        ? readerApi.getByTabID(tabs.selectedID)
-        : null;
-      if (reader) await this.handleSplitView(reader);
-      else await this.openSplitViewFromLibrary();
-    });
+  static registerCommandPalette(win: Window) {
+    commandPalette.register(win, () => this.commandEntry.execute(win));
   }
 
   /**
@@ -692,10 +694,6 @@ export class SplitViewFactory {
    */
   private static async swapPDFs(tabID: string) {
     await this.pdfSwap.swap(tabID);
-  }
-
-  private static async handleSplitView(reader: any) {
-    await this.readerEntryFlow.open(reader);
   }
 
   /**
@@ -796,15 +794,4 @@ export class SplitViewFactory {
   // NOTE: The old singleton cleanup() method has been replaced by:
   // - cleanupTab(tabID): saves state + cleans up resources for a specific tab
   // - cleanupTabResources(tabID): cleans up resources only (no state save)
-
-  // === Library-mode split view (open from Shift+P without an active reader) ===
-
-  /**
-   * Open split view from the library / non-reader context.
-   * Two-step flow: select first PDF → open it → select second PDF → split view.
-   * If the user cancels the second selection, the first PDF stays open as a normal tab.
-   */
-  private static async openSplitViewFromLibrary() {
-    await this.libraryFlow.open();
-  }
 }

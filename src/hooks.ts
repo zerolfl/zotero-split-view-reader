@@ -32,7 +32,7 @@ async function onStartup() {
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   SplitViewFactory.registerContextMenu();
   SplitViewFactory.registerTabLookup(win);
-  SplitViewFactory.registerPromptCommands(win);
+  SplitViewFactory.registerCommandPalette(win);
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
