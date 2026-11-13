@@ -32,6 +32,7 @@ import { pauseNativeReaders } from "../platform/readAloud";
 import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
 import { SplitViewConversionService } from "./splitView/conversion";
+import { SplitViewShutdown } from "./splitView/shutdown";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
@@ -503,6 +504,27 @@ export class SplitViewFactory {
     splitDifferentPDF: (reader, item) =>
       this.conversion.convertDifferentPDF(reader, item),
   });
+  private static shutdown = new SplitViewShutdown({
+    disposePDFSelector: () => this.pdfSelector.dispose(),
+    unregisterReaderContextMenu: () => this.readerContextMenu.unregister(),
+    getStates: () => this.stateMap.values(),
+    saveAll: (states) => this.tabNotifier.saveAll(states),
+    getTabIDs: () => this.stateMap.keys(),
+    cleanupTabResources: (tabID) => this.cleanupTabResources(tabID),
+    clearStates: () => this.stateMap.clear(),
+    unregisterSession: () => this.session.unregister(),
+    unregisterTabNotifier: () => this.tabNotifier.unregister(),
+    unregisterScrollbarObservers: () =>
+      this.splitScrollbar.unregisterObservers(),
+    unregisterTabTitles: () => this.tabTitles.unregister(),
+    unregisterReadAloud: () => this.readAloud.unregister(),
+    unregisterTabLookup: () => {
+      this.tabHooks.unregister();
+      this.tabContextMenu.unregister();
+    },
+    unregisterCommandPalette: () => commandPalette.unregister(),
+    debug: (message) => Zotero.debug(message),
+  });
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
@@ -658,43 +680,7 @@ export class SplitViewFactory {
    * This should be called during plugin shutdown.
    */
   static unregisterAll() {
-    this.pdfSelector.dispose();
-    this.readerContextMenu.unregister();
-    this.tabNotifier.saveAll(this.stateMap.values());
-
-    // Clean up all active split views
-    for (const tabID of this.stateMap.keys()) {
-      try {
-        this.cleanupTabResources(tabID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: unregisterAll - cleanupTabResources(${tabID}) failed: ${e}`,
-        );
-      }
-    }
-    this.stateMap.clear();
-
-    this.session.unregister();
-
-    this.tabNotifier.unregister();
-
-    this.splitScrollbar.unregisterObservers();
-    this.tabTitles.unregister();
-    this.readAloud.unregister();
-
-    // Restore Zotero_Tabs.getTabIDByItemID to avoid holding references and stale tab IDs
-    this.unregisterTabLookup();
-
-    commandPalette.unregister();
-  }
-
-  /**
-   * Restore original Zotero_Tabs.getTabIDByItemID. Call on plugin unload to avoid
-   * holding references to stateMap and to prevent returning stale tab IDs.
-   */
-  private static unregisterTabLookup() {
-    this.tabHooks.unregister();
-    this.tabContextMenu.unregister();
+    this.shutdown.unregisterAll();
   }
 
   /**
