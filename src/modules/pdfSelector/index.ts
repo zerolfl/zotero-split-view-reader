@@ -1,4 +1,4 @@
-import { createSelectionPrompt } from "../../platform/selectionPrompt";
+import { commandPalette } from "../../ui/commandPalette";
 import { getString } from "../../utils/locale";
 import {
   getItemDescription,
@@ -11,7 +11,8 @@ export class PDFSelector {
   private cancel: (() => void) | null = null;
 
   constructor(
-    private readonly createView: () => PDFSelectionView = createSelectionPrompt,
+    private readonly createView: () => PDFSelectionView = () =>
+      commandPalette.createSelectionView(),
     private readonly search: typeof searchPDFItems = searchPDFItems,
   ) {}
 

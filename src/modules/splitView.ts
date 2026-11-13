@@ -1,3 +1,4 @@
+import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
 import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
 import { SplitReadAloudService } from "./splitView/readAloud";
@@ -8,9 +9,6 @@ import {
   getSplitViewTabTitleForItems,
   type SplitTabsTitleMode,
 } from "../utils/splitTabTitle";
-
-/** Command id for the Split-View Reader prompt command; used for unregister to avoid leaks. */
-const SPLIT_VIEW_PROMPT_COMMAND_ID = "split-view-reader";
 
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
@@ -1247,33 +1245,15 @@ export class SplitViewFactory {
    * Context-aware: in a reader tab it starts the split view flow immediately;
    * in the library or any other tab it enters the two-step PDF selection flow.
    */
-  static registerPromptCommands() {
-    ztoolkit.Prompt.register([
-      {
-        id: SPLIT_VIEW_PROMPT_COMMAND_ID,
-        name: getString("splitview-command-label"),
-        label: "Split-View Reader",
-        callback: async (prompt) => {
-          const win = Zotero.getMainWindow();
-          const Zotero_Tabs = (win as any).Zotero_Tabs;
-          const selectedTabID = Zotero_Tabs?.selectedID;
-          const reader = selectedTabID
-            ? Zotero.Reader.getByTabID(selectedTabID)
-            : null;
-
-          // Hide the command palette before proceeding
-          prompt.promptNode.style.display = "none";
-
-          if (reader) {
-            // We are inside a reader tab – start split view with this PDF on the left
-            await this.handleSplitView(reader);
-          } else {
-            // Library or other non-reader tab – two-step flow
-            await this.openSplitViewFromLibrary();
-          }
-        },
-      },
-    ]);
+  static registerPromptCommands(win: Window) {
+    commandPalette.register(win, async () => {
+      const tabs = (win as any).Zotero_Tabs;
+      const reader = tabs?.selectedID
+        ? Zotero.Reader.getByTabID(tabs.selectedID)
+        : null;
+      if (reader) await this.handleSplitView(reader);
+      else await this.openSplitViewFromLibrary();
+    });
   }
 
   /**
@@ -1395,14 +1375,7 @@ export class SplitViewFactory {
     // Restore Zotero_Tabs.getTabIDByItemID to avoid holding references and stale tab IDs
     this.unregisterTabLookup();
 
-    // Unregister our command so Prompt no longer holds our callback
-    try {
-      ztoolkit.Prompt.unregister(SPLIT_VIEW_PROMPT_COMMAND_ID);
-    } catch (e) {
-      Zotero.debug(
-        `Split view: unregisterAll - Prompt.unregister failed: ${e}`,
-      );
-    }
+    commandPalette.unregister();
   }
 
   /**

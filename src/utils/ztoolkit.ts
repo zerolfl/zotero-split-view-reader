@@ -2,7 +2,6 @@ import {
   BasicTool,
   makeHelperTool,
   ProgressWindowHelper,
-  PromptManager,
   UITool,
   unregister,
 } from "zotero-plugin-toolkit";
@@ -59,13 +58,11 @@ function initZToolkit(_ztoolkit: ReturnType<typeof createZToolkit>) {
 
 class ZoteroToolkit extends BasicTool {
   UI: UITool;
-  Prompt: PromptManager;
   ProgressWindow: typeof ProgressWindowHelper;
 
   constructor() {
     super();
     this.UI = new UITool(this);
-    this.Prompt = new PromptManager(this);
     this.ProgressWindow = makeHelperTool(ProgressWindowHelper, this);
   }
 

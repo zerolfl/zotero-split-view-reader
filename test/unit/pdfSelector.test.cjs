@@ -35,7 +35,9 @@ function selectorRuntime(search) {
       clearTimeout: (id) => timers.delete(id),
     },
     {
-      "../../platform/selectionPrompt": { createSelectionPrompt: () => {} },
+      "../../ui/commandPalette": {
+        commandPalette: { createSelectionView: () => {} },
+      },
       "../../utils/locale": { getString: (key) => key },
       "./search": {
         getItemDescription: () => "description",

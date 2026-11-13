@@ -19,7 +19,6 @@ async function onStartup() {
   SplitViewFactory.registerTabLookup();
   SplitViewFactory.registerPrefObservers();
   SplitViewFactory.registerSplitTabTitleItemNotifier();
-  SplitViewFactory.registerPromptCommands();
 
   registerPreferencePane();
 
@@ -33,6 +32,7 @@ async function onStartup() {
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
+  SplitViewFactory.registerPromptCommands(win);
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
