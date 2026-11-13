@@ -139,7 +139,7 @@ export class SplitViewFactory {
 
           let itemID = this.getActiveItemID(currentState);
           const item = Zotero.Items.get(itemID);
-          if (item?.parentItemID) {
+          if (item && item.parentItemID) {
             itemID = item.parentItemID;
           }
           const pane = (win as any).ZoteroPane_Local || (win as any).ZoteroPane;
@@ -2003,6 +2003,7 @@ export class SplitViewFactory {
     const currentItemID =
       targetSide === "left" ? state.leftItemID : state.rightItemID;
     const currentItem = Zotero.Items.get(currentItemID);
+    if (!currentItem) return;
 
     // Show PDF selection dialog
     const selectedPDF = await this.pdfSelector.select(currentItem.libraryID);
@@ -2292,6 +2293,7 @@ export class SplitViewFactory {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       const currentItem = Zotero.Items.get(reader.itemID);
+      if (!currentItem) return;
       const selectedPDF = await this.pdfSelector.select(currentItem.libraryID);
       if (!selectedPDF) return;
 
@@ -2328,6 +2330,7 @@ export class SplitViewFactory {
     const tabID = currentReader.tabID;
     const leftItemID = currentReader.itemID;
     const leftItem = Zotero.Items.get(leftItemID);
+    if (!leftItem) throw new Error(`Attachment ${leftItemID} is unavailable`);
     const container = win.document.getElementById(tabID);
 
     if (!container) {
@@ -2672,6 +2675,7 @@ export class SplitViewFactory {
     const tabID = currentReader.tabID;
     const itemID = currentReader.itemID;
     const item = Zotero.Items.get(itemID);
+    if (!item) throw new Error(`Attachment ${itemID} is unavailable`);
     const container = win.document.getElementById(tabID);
 
     if (!container) {
@@ -4307,7 +4311,7 @@ export class SplitViewFactory {
       const win = Zotero.getMainWindow();
       const Zotero_Tabs = (win as any)?.Zotero_Tabs;
       const reader = Zotero.Reader.getByTabID(tabID);
-      let tab: any = null;
+      let tab: any;
       try {
         tab = Zotero_Tabs?._getTab(tabID)?.tab || null;
       } catch {
@@ -4850,6 +4854,7 @@ export class SplitViewFactory {
     annotations: any[],
   ) {
     const attachment = Zotero.Items.get(item.id);
+    if (!attachment) throw new Error(`Attachment ${item.id} is unavailable`);
     try {
       for (const annotation of annotations) {
         annotation.key = annotation.id;
@@ -4870,6 +4875,7 @@ export class SplitViewFactory {
     ids: string[],
   ) {
     const attachment = Zotero.Items.get(item.id);
+    if (!attachment) throw new Error(`Attachment ${item.id} is unavailable`);
     const libraryID = attachment.libraryID;
     try {
       for (const key of ids) {
@@ -6614,11 +6620,11 @@ export class SplitViewFactory {
       // Wait for tab switch and reader initialization
       await new Promise((resolve) => setTimeout(resolve, 300));
       // Get the reader after switching
-      reader = Zotero.Reader.getByTabID(existingTabID);
+      reader = Zotero.Reader.getByTabID(existingTabID) || null;
       if (!reader) {
         // Tab might be unloaded, wait for it to load
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        reader = Zotero.Reader.getByTabID(existingTabID);
+        reader = Zotero.Reader.getByTabID(existingTabID) || null;
       }
     }
 

@@ -3,7 +3,8 @@ import { getOpenReaderAttachmentIDs } from "../../platform/readerRegistry";
 export function getPDFAttachments(item: Zotero.Item): Zotero.Item[] {
   return item.getAttachments().flatMap((id) => {
     const attachment = Zotero.Items.get(id);
-    return attachment?.isFileAttachment() &&
+    return attachment &&
+      attachment.isFileAttachment() &&
       attachment.attachmentContentType === "application/pdf"
       ? [attachment]
       : [];
@@ -37,7 +38,8 @@ export async function searchPDFItems(
   } else {
     ids = getOpenReaderAttachmentIDs().flatMap((id) => {
       const attachment = Zotero.Items.get(id);
-      return attachment?.isFileAttachment() &&
+      return attachment &&
+        attachment.isFileAttachment() &&
         attachment.attachmentContentType === "application/pdf" &&
         attachment.parentID
         ? [attachment.parentID]
@@ -49,7 +51,8 @@ export async function searchPDFItems(
   for (const id of new Set(ids)) {
     const item = Zotero.Items.get(id);
     if (
-      !item?.isRegularItem() ||
+      !item ||
+      !item.isRegularItem() ||
       (libraryID !== undefined && item.libraryID !== libraryID) ||
       !getPDFAttachments(item).length
     ) {

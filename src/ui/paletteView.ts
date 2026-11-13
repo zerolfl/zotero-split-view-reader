@@ -13,26 +13,29 @@ export class PaletteView {
   private selected = 0;
   private previousFocus: Element | null = null;
 
-  constructor(private readonly win: Window) {
+  constructor(
+    private readonly win: Window,
+    private readonly ui = ztoolkit.UI,
+  ) {
     const doc = win.document;
-    this.root = ztoolkit.UI.createElement(doc, "div", {
+    this.root = this.ui.createElement(doc, "div", {
       namespace: "html",
       classList: ["split-view-palette"],
       attributes: { hidden: "true" },
     });
-    const style = ztoolkit.UI.createElement(doc, "link", {
+    const style = this.ui.createElement(doc, "link", {
       namespace: "html",
       attributes: {
         rel: "stylesheet",
         href: `chrome://${config.addonRef}/content/palette.css`,
       },
     });
-    const panel = ztoolkit.UI.createElement(doc, "div", {
+    const panel = this.ui.createElement(doc, "div", {
       namespace: "html",
       classList: ["split-view-palette-panel"],
       attributes: { role: "dialog", "aria-label": config.addonName },
     });
-    this.input = ztoolkit.UI.createElement(doc, "input", {
+    this.input = this.ui.createElement(doc, "input", {
       namespace: "html",
       attributes: {
         type: "text",
@@ -42,7 +45,7 @@ export class PaletteView {
         "aria-controls": `${config.addonRef}-choices`,
       },
     });
-    this.list = ztoolkit.UI.createElement(doc, "div", {
+    this.list = this.ui.createElement(doc, "div", {
       namespace: "html",
       attributes: { id: `${config.addonRef}-choices`, role: "listbox" },
     });
@@ -88,7 +91,7 @@ export class PaletteView {
     const doc = this.win.document;
     if (!rows.length) {
       this.list.appendChild(
-        ztoolkit.UI.createElement(doc, "div", {
+        this.ui.createElement(doc, "div", {
           namespace: "html",
           classList: ["split-view-palette-empty"],
           properties: { textContent: emptyMessage },
@@ -97,7 +100,7 @@ export class PaletteView {
       );
     }
     rows.forEach((row, index) => {
-      const node = ztoolkit.UI.createElement(doc, "div", {
+      const node = this.ui.createElement(doc, "div", {
         namespace: "html",
         classList: ["split-view-palette-row"],
         attributes: {

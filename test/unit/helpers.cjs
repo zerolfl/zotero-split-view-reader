@@ -1,18 +1,17 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
-const ts = require("typescript");
+const { transformSync } = require("esbuild");
 
 function load(filename, globals, imports = {}) {
   const module = { exports: {} };
-  const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
+  const { code } = transformSync(readFileSync(filename, "utf8"), {
+    loader: "ts",
+    format: "cjs",
+    target: "es2022",
   });
   vm.runInNewContext(
-    outputText,
+    code,
     {
       module,
       exports: module.exports,

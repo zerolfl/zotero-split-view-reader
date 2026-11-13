@@ -47,7 +47,7 @@ export function formatSplitTabTitleFromData(
 
   const creator = data.firstCreator || "";
   const year = normalizeYear(data.year);
-  let parts: Array<string | false> = [];
+  let parts: Array<string | false>;
   if (data.isPrimaryAttachment) {
     if (mode === "creatorYearTitle" && creator) {
       parts = [creator, year, data.parentTitle];
