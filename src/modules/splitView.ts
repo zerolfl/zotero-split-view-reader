@@ -26,6 +26,7 @@ import { SeparateViewTargets } from "./splitView/separateViewTargets";
 import { SplitViewLifecycle } from "./splitView/lifecycle";
 import { PDFSwapService } from "./splitView/pdfSwap";
 import { PDFReplacementService } from "./splitView/pdfReplacement";
+import { SplitReaderBrowserAdapter } from "../platform/splitReaderBrowser";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -71,6 +72,14 @@ export class SplitViewFactory {
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
     setAudioStatus: (id, status) => this.setSplitTabAudioStatus(id, status),
     pauseOtherReaders: pauseNativeReaders,
+  });
+  private static readerBrowser = new SplitReaderBrowserAdapter({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getReaderForBrowser: (browser) =>
+      readerRuntime.getReaderForBrowser(browser),
+    closeReader: (reader) => readerRuntime.closeReaderWithoutClosingTab(reader),
+    clearReadAloudSide: (state, side) =>
+      this.readAloudCoordinator.clearSide(state as SplitTabState, side),
   });
   private static tabHooks = new TabHooks({
     hasSplit: (id) => this.hasActiveSplitState(id),
@@ -146,7 +155,7 @@ export class SplitViewFactory {
     getState: (tabID) => this.stateMap.get(tabID) || null,
     captureViewState: (browser) =>
       readerView.getCurrentViewStateFromBrowser(browser),
-    replaceBrowser: (tabID, side) => this.replaceBrowser(tabID, side),
+    replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
     getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
     getMainWindow: () => Zotero.getMainWindow(),
     initializeReader: (...args) => this.initializeReader(...args),
@@ -171,7 +180,7 @@ export class SplitViewFactory {
     getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
     selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
-    replaceBrowser: (tabID, side) => this.replaceBrowser(tabID, side),
+    replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
     getMainWindow: () => Zotero.getMainWindow(),
     initializeReader: (...args) => this.initializeReader(...args),
     setupBrowserFocusListeners: (...args) =>
@@ -774,86 +783,6 @@ export class SplitViewFactory {
     }
 
     this.updateTabDataForSession(tabID);
-  }
-
-  /**
-   * Replace the browser element for a side to ensure fresh state
-   * @param tabID Tab ID
-   * @param side 'left' or 'right'
-   * @returns The new browser element
-   */
-  private static async replaceBrowser(
-    tabID: string,
-    side: "left" | "right",
-  ): Promise<XULBrowserElement | null> {
-    const state = this.stateMap.get(tabID);
-    if (!state) return null;
-
-    const oldBrowser = side === "left" ? state.leftBrowser : state.rightBrowser;
-    const container = oldBrowser.parentNode;
-
-    if (!container) return null;
-    state.disposeAnnotations?.();
-    state.disposeAnnotations = undefined;
-
-    // Close the old reader instance associated with this browser.
-    // This removes it from Zotero.Reader._readers and prevents orphaned readers.
-    const oldReader = readerRuntime.getReaderForBrowser(oldBrowser);
-    if (oldReader) {
-      await readerRuntime.closeReaderWithoutClosingTab(oldReader);
-    }
-    this.readAloudCoordinator.clearSide(state, side);
-
-    // Create new browser element
-    const doc = oldBrowser.ownerDocument;
-    if (!doc) return null;
-    const newBrowser = doc.createXULElement("browser") as XULBrowserElement;
-
-    // Copy attributes from createReaderBrowser
-    newBrowser.setAttribute("type", "content");
-    newBrowser.setAttribute("transparent", "true");
-    newBrowser.setAttribute("src", "resource://zotero/reader/reader.html");
-
-    // Copy styles from old browser to maintain layout
-    newBrowser.className = oldBrowser.className;
-
-    // Manually copy style properties to preserve layout
-    const oldStyle = (oldBrowser as any).style;
-    (newBrowser as any).style.flex = oldStyle.flex;
-    (newBrowser as any).style.minWidth = oldStyle.minWidth;
-    (newBrowser as any).style.maxWidth = oldStyle.maxWidth;
-    (newBrowser as any).style.overflow = oldStyle.overflow;
-    (newBrowser as any).style.boxSizing = oldStyle.boxSizing;
-
-    // Remove tracked event listeners bound to the old browser before replacing it.
-    // This avoids stale references and cleanup errors when the old browser is dead.
-    state.eventListeners = state.eventListeners.filter((entry) => {
-      if (entry.target === oldBrowser) {
-        try {
-          entry.target.removeEventListener(
-            entry.type,
-            entry.listener,
-            entry.options,
-          );
-        } catch {
-          // Old browser may already be dead
-        }
-        return false;
-      }
-      return true;
-    });
-
-    // Replace in DOM
-    container.replaceChild(newBrowser, oldBrowser);
-
-    // Update state
-    if (side === "left") {
-      state.leftBrowser = newBrowser;
-    } else {
-      state.rightBrowser = newBrowser;
-    }
-
-    return newBrowser;
   }
 
   /**
