@@ -24,6 +24,7 @@ import { SplitReaderContextMenu } from "./splitView/readerContextMenu";
 import { SplitLibraryFlow } from "./splitView/libraryFlow";
 import { SeparateViewTargets } from "./splitView/separateViewTargets";
 import { SplitViewLifecycle } from "./splitView/lifecycle";
+import { PDFSwapService } from "./splitView/pdfSwap";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -140,6 +141,30 @@ export class SplitViewFactory {
     },
   });
   private static readerHost = new SplitReaderHost();
+  private static pdfSwap = new PDFSwapService({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    captureViewState: (browser) =>
+      readerView.getCurrentViewStateFromBrowser(browser),
+    replaceBrowser: (tabID, side) => this.replaceBrowser(tabID, side),
+    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    getMainWindow: () => Zotero.getMainWindow(),
+    initializeReader: (...args) => this.initializeReader(...args),
+    setupFocusListeners: (...args) => this.setupFocusListeners(...args),
+    setupCtrlKeyListener: (...args) => this.setupCtrlKeyListener(...args),
+    setupZoomButtonListeners: (tabID, browser) =>
+      this.sync.setupZoomButtonListeners(tabID, browser),
+    stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
+    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateContextPane: (tabID, win, itemID) =>
+      splitContextPane.updateItem(tabID, win, itemID),
+    bindAnnotations: (state) => bindSplitAnnotations(state),
+    updateSession: (tabID) => this.updateTabDataForSession(tabID),
+    renameTab: (tabID) => this.tabTitles.renameTab(tabID),
+    scheduleSyncRestart: (tabID, state) =>
+      this.scheduleSyncRestart(tabID, state),
+    showSwapped: () => this.showSplitViewSwappedMessage(),
+    debug: (message) => Zotero.debug(message),
+  });
   private static pdfSelector = new PDFSelector();
   private static libraryFlow = new SplitLibraryFlow({
     selectPDF: (step, libraryID) =>
@@ -964,143 +989,7 @@ export class SplitViewFactory {
    * Primary and active side settings remain attached to their panes.
    */
   private static async swapPDFs(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    try {
-      // 1. Save current view states from browsers
-      let leftCurrentState: any = null;
-      let rightCurrentState: any = null;
-      try {
-        leftCurrentState = readerView.getCurrentViewStateFromBrowser(
-          state.leftBrowser,
-        );
-      } catch {
-        // Browser may be dead
-      }
-      try {
-        rightCurrentState = readerView.getCurrentViewStateFromBrowser(
-          state.rightBrowser,
-        );
-      } catch {
-        // Browser may be dead
-      }
-      const leftViewState = leftCurrentState || state.leftViewState;
-      const rightViewState = rightCurrentState || state.rightViewState;
-
-      // 2. Record current item IDs and parent IDs
-      const oldLeftItemID = state.leftItemID;
-      const oldRightItemID = state.rightItemID;
-      const oldLeftParentItemID = state.leftParentItemID;
-      const oldRightParentItemID = state.rightParentItemID;
-
-      // 3. Stop sync polling during swap
-      const hadPrimary = !!state.primarySide;
-      if (hadPrimary) {
-        this.sync.stopSyncPolling(tabID);
-      }
-
-      // 4. Replace both browsers to get fresh instances (closes old readers)
-      const newLeftBrowser = await this.replaceBrowser(tabID, "left");
-      const newRightBrowser = await this.replaceBrowser(tabID, "right");
-      if (!newLeftBrowser || !newRightBrowser) {
-        throw new Error("Failed to replace browser elements for swap");
-      }
-
-      // 5. Swap state: left gets old right, right gets old left
-      state.leftItemID = oldRightItemID;
-      state.rightItemID = oldLeftItemID;
-      state.leftParentItemID = oldRightParentItemID;
-      state.rightParentItemID = oldLeftParentItemID;
-      state.leftViewState = rightViewState;
-      state.rightViewState = leftViewState;
-
-      // 6. Primary and active sides remain unchanged (do not follow the swap)
-
-      // 7. Get items for initialization
-      const newLeftItem = Zotero.Items.get(state.leftItemID);
-      const newRightItem = Zotero.Items.get(state.rightItemID);
-      if (!newLeftItem || !newRightItem) {
-        throw new Error("Failed to get items for swap");
-      }
-
-      // 8. Initialize both readers with swapped content
-      const win = Zotero.getMainWindow();
-      await Promise.all([
-        this.initializeReader(
-          tabID,
-          newLeftBrowser,
-          newLeftItem,
-          state.leftPopupset,
-          rightViewState,
-          false, // left is never isRight
-        ),
-        this.initializeReader(
-          tabID,
-          newRightBrowser,
-          newRightItem,
-          state.rightPopupset,
-          leftViewState,
-          true, // right is always isRight
-        ),
-      ]);
-
-      // 9. Setup listeners for both new browsers
-      this.setupFocusListeners(tabID, newLeftBrowser, newRightBrowser, win);
-      this.setupCtrlKeyListener(tabID, newLeftBrowser);
-      this.setupCtrlKeyListener(tabID, newRightBrowser);
-      this.sync.setupZoomButtonListeners(tabID, newLeftBrowser);
-      this.sync.setupZoomButtonListeners(tabID, newRightBrowser);
-
-      // 10. Update scrollbar colors to reflect new primary side
-      this.updateScrollbarColors(tabID);
-
-      // 11. Update context pane for the active side
-      const activeParentItemID =
-        state.activeSide === "left"
-          ? state.leftParentItemID
-          : state.rightParentItemID;
-      splitContextPane.updateItem(tabID, win, activeParentItemID);
-
-      // 12. Setup annotation sync if same PDF
-      if (state.isSamePDF) {
-        bindSplitAnnotations(state);
-      }
-
-      // 13. Update tab data and title
-      this.updateTabDataForSession(tabID);
-      await this.tabTitles.renameTab(tabID);
-
-      // 14. Restart sync if a primary view is active
-      if (hadPrimary) {
-        this.trackTimeout(
-          state,
-          () => {
-            const s = this.stateMap.get(tabID);
-            if (s && s.primarySide) {
-              this.sync.cacheViewerContainers(tabID);
-              this.sync.initSyncState(tabID);
-              this.sync.startSyncPolling(tabID);
-            }
-          },
-          500,
-        );
-      }
-
-      // Show success notification
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-swap-pdf"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(2000);
-    } catch (e) {
-      Zotero.debug(`Split view: Error swapping PDFs: ${e}`);
-    }
+    await this.pdfSwap.swap(tabID);
   }
 
   private static async handleSplitView(reader: any) {
@@ -2425,6 +2314,33 @@ export class SplitViewFactory {
       })
       .show();
     popup.startCloseTimer(2000);
+  }
+
+  private static showSplitViewSwappedMessage() {
+    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+      closeOnClick: true,
+    })
+      .createLine({
+        text: getString("splitview-swap-pdf"),
+        type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
+      })
+      .show();
+    popup.startCloseTimer(2000);
+  }
+
+  private static scheduleSyncRestart(tabID: string, state: SplitTabState) {
+    this.trackTimeout(
+      state,
+      () => {
+        const current = this.stateMap.get(tabID);
+        if (!current?.primarySide) return;
+        this.sync.cacheViewerContainers(tabID);
+        this.sync.initSyncState(tabID);
+        this.sync.startSyncPolling(tabID);
+      },
+      500,
+    );
   }
 
   /**
