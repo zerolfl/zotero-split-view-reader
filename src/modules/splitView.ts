@@ -28,6 +28,7 @@ import { PDFSwapService } from "./splitView/pdfSwap";
 import { PDFReplacementService } from "./splitView/pdfReplacement";
 import { SplitReaderBrowserAdapter } from "../platform/splitReaderBrowser";
 import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
+import { createSplitTabState } from "./splitView/state";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { SplitInteractions } from "./splitView/interactions";
 import { config } from "../../package.json";
@@ -925,7 +926,7 @@ export class SplitViewFactory {
       originalTitle = undefined;
     }
 
-    const newState: SplitTabState = {
+    const newState = createSplitTabState({
       tabID,
       container: newContainer as unknown as XUL.Box,
       leftBrowser,
@@ -937,36 +938,12 @@ export class SplitViewFactory {
       leftParentItemID,
       rightParentItemID,
       primarySide: this.getDefaultPrimarySide(),
-      activeSide: "left",
-      readAloudSide: null,
-      readAloudStatuses: {
-        left: null,
-        right: null,
-      },
-      scrollHandler: null,
-      scrollHandlerBrowser: null,
-      lastPrimaryScroll: null,
-      syncPaused: false,
-      sidebarToggleTimers: [],
-      ctrlPressed: false,
-      zoomingCount: 0,
       eventListeners,
-      timeoutIds: [],
-      toolbarCloseObservers: [],
-      contextPaneObserver: null,
-      leftViewerContainer: null,
-      rightViewerContainer: null,
-      splitRatio: 0.5,
-      leftViewState: leftViewState,
+      leftViewState,
       rightViewState: rightViewState,
-      isCleaningUp: false,
-      // Different PDF split view - no same PDF sync
       isSamePDF: false,
-      scrollSyncRAFPending: false,
-      lastScrollSyncTime: 0,
-      resizeTimerId: null,
       originalTitle,
-    };
+    });
     this.stateMap.set(tabID, newState);
 
     // Set up drag functionality
@@ -1130,7 +1107,7 @@ export class SplitViewFactory {
       originalTitle = undefined;
     }
 
-    const newState: SplitTabState = {
+    const newState = createSplitTabState({
       tabID,
       container: newContainer as unknown as XUL.Box,
       leftBrowser,
@@ -1140,38 +1117,14 @@ export class SplitViewFactory {
       leftItemID: itemID,
       rightItemID: itemID, // Same PDF
       leftParentItemID: parentItemID,
-      rightParentItemID: parentItemID, // Same parent
+      rightParentItemID: parentItemID,
       primarySide: this.getDefaultPrimarySide(),
-      activeSide: "left",
-      readAloudSide: null,
-      readAloudStatuses: {
-        left: null,
-        right: null,
-      },
-      scrollHandler: null,
-      scrollHandlerBrowser: null,
-      lastPrimaryScroll: null,
-      syncPaused: false,
-      sidebarToggleTimers: [],
-      ctrlPressed: false,
-      zoomingCount: 0,
       eventListeners,
-      timeoutIds: [],
-      toolbarCloseObservers: [],
-      contextPaneObserver: null,
-      leftViewerContainer: null,
-      rightViewerContainer: null,
-      splitRatio: 0.5,
-      leftViewState: leftViewState,
+      leftViewState,
       rightViewState,
-      isCleaningUp: false,
-      // Same PDF split view specific
       isSamePDF: true,
-      scrollSyncRAFPending: false,
-      lastScrollSyncTime: 0,
-      resizeTimerId: null,
       originalTitle,
-    };
+    });
     this.stateMap.set(tabID, newState);
 
     // Set up drag functionality
