@@ -44,14 +44,18 @@ export class SplitReaderHost {
     const ftl: string[] = [];
     try {
       ftl.push(
-        Zotero.File.getContentsFromURL("chrome://zotero/locale/zotero.ftl"),
+        await Zotero.File.getContentsFromURLAsync(
+          "chrome://zotero/locale/zotero.ftl",
+        ),
       );
     } catch {
       // Ignore FTL loading errors.
     }
     try {
       ftl.push(
-        Zotero.File.getContentsFromURL("chrome://zotero/locale/reader.ftl"),
+        await Zotero.File.getContentsFromURLAsync(
+          "chrome://zotero/locale/reader.ftl",
+        ),
       );
     } catch {
       // Ignore FTL loading errors.

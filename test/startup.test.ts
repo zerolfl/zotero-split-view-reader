@@ -30,7 +30,7 @@ describe(`startup (Zotero ${clientVersion})`, function () {
     }
     if (!pane) throw new Error("Preference pane was not registered");
 
-    const markup = Zotero.File.getContentsFromURL(pane.src);
+    const markup = await Zotero.File.getContentsFromURLAsync(pane.src);
     assert.include(markup, `${config.addonRef}-preferences.ftl`);
 
     const locale = Zotero[config.addonInstance].data.locale.current;

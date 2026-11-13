@@ -12,6 +12,7 @@ test("reader host builds localized config, clones it and runs callbacks after re
   let saveCompleted = 0;
   let contextPaneToggled = 0;
   let launchedURL;
+  const fetchedFtl = [];
   const zotero = { launchURL: (url) => (launchedURL = url) };
   const win = {
     wrappedJSObject: {
@@ -36,7 +37,12 @@ test("reader host builds localized config, clones it and runs callbacks after re
     {
       Zotero: Object.assign(zotero, {
         API: { getLibraryPrefix: () => "users/1" },
-        File: { getContentsFromURL: (url) => `contents:${url}` },
+        File: {
+          getContentsFromURLAsync: async (url) => {
+            fetchedFtl.push(url);
+            return `contents:${url}`;
+          },
+        },
         Prefs: preferences,
         Users: { getCurrentName: () => "Reader" },
         Libraries: { userLibraryID: 1 },
@@ -70,6 +76,10 @@ test("reader host builds localized config, clones it and runs callbacks after re
     isRight: true,
     getReadAloudConfig: async (ftl, onStatus) => {
       assert.equal(ftl.length, 2);
+      assert.deepEqual(Array.from(ftl), [
+        "contents:chrome://zotero/locale/zotero.ftl",
+        "contents:chrome://zotero/locale/reader.ftl",
+      ]);
       readAloudStatus = onStatus;
       return { enableReadAloud: true };
     },
@@ -89,6 +99,10 @@ test("reader host builds localized config, clones it and runs callbacks after re
   });
 
   assert.deepEqual(calls, ["browser", "reader"]);
+  assert.deepEqual(fetchedFtl, [
+    "chrome://zotero/locale/zotero.ftl",
+    "chrome://zotero/locale/reader.ftl",
+  ]);
   assert.equal(config.type, "pdf");
   assert.equal(config.data.url, "zotero://attachment/users/1/items/PDFKEY/");
   assert.equal(config.bottomPlaceholderHeight, 0);
