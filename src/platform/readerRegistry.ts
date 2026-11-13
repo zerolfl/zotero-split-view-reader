@@ -1,3 +1,4 @@
+import { tabsForWindow } from "./tabs";
 interface ReaderTab {
   id: string;
   type: string;
@@ -13,8 +14,7 @@ export function getOpenReaderAttachmentIDs(): number[] {
   for (const reader of (Zotero.Reader as any)._readers || []) {
     if (reader?.itemID) ids.add(reader.itemID);
   }
-  const tabs: ReaderTab[] =
-    (Zotero.getMainWindow() as any)?.Zotero_Tabs?._tabs || [];
+  const tabs: ReaderTab[] = tabsForWindow().list();
   for (const tab of tabs) {
     if (!tab.type?.startsWith("reader")) continue;
     for (const id of [

@@ -96,4 +96,47 @@ describe("split reader integration", function () {
     assert.equal(data.leftItemID, data.rightItemID);
     assert.notEqual(state.leftBrowser, state.rightBrowser);
   });
+
+  it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
+    const state = await open(true);
+    factory.setPrimarySide(state.tabID, null);
+    const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
+    await readerView.applyViewStateToReader(first, {
+      pageIndex: 1,
+      scale: 125,
+    });
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(first).pageIndex,
+      1,
+    );
+    state.splitRatio = 0.35;
+    state.activeSide = "right";
+    factory.updateTabDataForSession(state.tabID);
+    const tabs = Zotero.getMainWindow().Zotero_Tabs as any;
+    const saved = JSON.parse(
+      JSON.stringify(tabs._getTab(state.tabID).tab.data),
+    );
+    assert.equal(saved.leftViewState.pageIndex, 1, "saved left position");
+    assert.equal(saved.rightViewState.pageIndex, 0, "saved right position");
+    factory.closeSplitTab(state.tabID);
+    const ordinary = await Zotero.Reader.open(left.id);
+    await readerRuntime.waitForReaderReady(ordinary);
+    tabs.setTabData(ordinary!.tabID, saved);
+    await factory.restoreSplitViewFromSession(ordinary!.tabID, saved);
+    const restored = factory.stateMap.get(ordinary!.tabID);
+    assert.strictEqual(restored.primarySide, null);
+    assert.equal(restored.activeSide, "right");
+    assert.equal(restored.splitRatio, 0.35);
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(restored.leftBrowser)
+        .pageIndex,
+      1,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(restored.rightBrowser)
+        .pageIndex,
+      0,
+      "restored right position",
+    );
+  });
 });

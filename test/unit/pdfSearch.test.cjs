@@ -52,7 +52,9 @@ function searchRuntime() {
       },
     },
   };
-  const registry = load("src/platform/readerRegistry.ts", globals);
+  const registry = load("src/platform/readerRegistry.ts", globals, {
+    "./tabs": load("src/platform/tabs.ts", globals),
+  });
   const search = load("src/modules/pdfSelector/search.ts", globals, {
     "../../platform/readerRegistry": registry,
   });
