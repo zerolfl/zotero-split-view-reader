@@ -299,6 +299,7 @@ export class SplitViewFactory {
         this.installToolbarCloseButton(tabID, browser, side);
         if (side === "left") splitContextPane.hideReaderSidenav(browser);
         else splitContextPane.injectReaderHandler(browser);
+        this.splitScrollbar.update(tabID);
       },
     },
   );

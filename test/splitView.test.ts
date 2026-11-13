@@ -64,12 +64,16 @@ describe("split reader integration", function () {
     const reader = await Zotero.Reader.open(left.id);
     assert.ok(reader);
     await readerRuntime.waitForReaderReady(reader);
-    if (samePDF) await factory.convertToSamePDFSplitView(reader);
-    else await factory.convertToSplitView(reader, right);
+    if (samePDF) await factory.conversion.convertSamePDF(reader);
+    else await factory.conversion.convertDifferentPDF(reader, right);
     const state = factory.stateMap.get(reader!.tabID);
     assert.ok(state);
     await Zotero.Promise.delay(700);
     return state;
+  }
+
+  function setPrimarySide(tabID: string, side: "left" | "right" | null) {
+    factory.primaryView.setSide(tabID, side);
   }
 
   async function waitFor(check: () => boolean): Promise<void> {
@@ -110,7 +114,7 @@ describe("split reader integration", function () {
     );
     assert.equal(readerView.getPdfViewerFromReader(first).pagesCount, 2);
     assert.equal(readerView.getPdfViewerFromReader(second).pagesCount, 2);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const result = await readerView.applyViewStateToReader(first, {
       pageIndex: 1,
       scale: 100,
@@ -160,7 +164,7 @@ describe("split reader integration", function () {
       assert.strictEqual(findButton.nextElementSibling, closeButton);
       assert.equal(
         closeButton.getAttribute("aria-label"),
-        factory.getCloseViewMenuLabel(),
+        factory.menuPresentation.getCloseViewMenuLabel(),
       );
       assert.ok(document.getElementById("split-view-close-button-style"));
     }
@@ -177,18 +181,18 @@ describe("split reader integration", function () {
 
     await waitFor(() => !!getScrollbarStyle(state.leftBrowser));
     assert.isNull(getScrollbarStyle(state.rightBrowser));
-    factory.setPrimarySide(state.tabID, "right");
+    setPrimarySide(state.tabID, "right");
     assert.isNull(getScrollbarStyle(state.leftBrowser));
     await waitFor(() => !!getScrollbarStyle(state.rightBrowser));
     assert.ok(getScrollbarStyle(state.rightBrowser));
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     assert.isNull(getScrollbarStyle(state.leftBrowser));
     assert.isNull(getScrollbarStyle(state.rightBrowser));
   });
 
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
     const state = await open(true);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
     const second = readerRuntime.getInternalReaderFromBrowser(
       state.rightBrowser,
@@ -303,7 +307,7 @@ describe("split reader integration", function () {
 
   it("swaps different PDFs together with their view positions and session data", async function () {
     const state = await open(false);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     factory.interactions.activateSide(
       state.tabID,
       "right",
@@ -370,7 +374,7 @@ describe("split reader integration", function () {
 
   it("closes one side and keeps the other reader position", async function () {
     const state = await open(false);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const leftReader = readerRuntime.getInternalReaderFromBrowser(
       state.leftBrowser,
     );
@@ -416,7 +420,7 @@ describe("split reader integration", function () {
 
   it("closing one same-PDF side keeps that side's independent position", async function () {
     const state = await open(true);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const leftReader = readerRuntime.getInternalReaderFromBrowser(
       state.leftBrowser,
     );
@@ -475,7 +479,7 @@ describe("split reader integration", function () {
 
   it("separates different PDFs into their existing reader tabs with each position", async function () {
     const state = await open(false);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const leftSplitReader = readerRuntime.getInternalReaderFromBrowser(
       state.leftBrowser,
     );
@@ -534,7 +538,7 @@ describe("split reader integration", function () {
 
   it("separates the selected position when both views use the same PDF", async function () {
     const state = await open(true);
-    factory.setPrimarySide(state.tabID, null);
+    setPrimarySide(state.tabID, null);
     const leftReader = readerRuntime.getInternalReaderFromBrowser(
       state.leftBrowser,
     );
