@@ -33,6 +33,7 @@ import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
 import { SplitViewConversionService } from "./splitView/conversion";
 import { SplitViewShutdown } from "./splitView/shutdown";
+import { SplitTabResourceTracker } from "./splitView/resourceTracker";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
@@ -214,13 +215,17 @@ export class SplitViewFactory {
     setContextPaneOpen: (browser, open) =>
       splitContextPane.setReaderOpen(browser, open),
   });
+  private static resourceTracker = new SplitTabResourceTracker(() =>
+    Zotero.getMainWindow(),
+  );
   private static sync = new SplitSync({
     getState: (id) => this.stateMap.get(id),
     getEffectivePrimarySide: (state) =>
       this.primaryView.getEffectiveSide(state),
     getMainWindow: () => Zotero.getMainWindow(),
-    trackEventListener: (...args) => this.trackEventListener(...args),
-    trackTimeout: (...args) => this.trackTimeout(...args),
+    trackEventListener: (...args) =>
+      this.resourceTracker.trackEventListener(...args),
+    trackTimeout: (...args) => this.resourceTracker.trackTimeout(...args),
     onPositionSynced: (side, result) =>
       this.notifications.showPositionSynced(side, result),
   });
@@ -229,7 +234,8 @@ export class SplitViewFactory {
     getEffectivePrimarySide: (state) =>
       this.primaryView.getEffectiveSide(state),
     sync: this.sync,
-    trackEventListener: (...args) => this.trackEventListener(...args),
+    trackEventListener: (...args) =>
+      this.resourceTracker.trackEventListener(...args),
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
   });
   private static primaryView = new SplitPrimaryView({
@@ -339,7 +345,7 @@ export class SplitViewFactory {
       this.interactions.setupFocusListeners(...args),
     bindAnnotations: (state) => bindSplitAnnotations(state),
     scheduleDelayedSetup: (tabID, state, win, leftBrowser, rightBrowser) =>
-      this.trackTimeout(
+      this.resourceTracker.trackTimeout(
         state,
         () => {
           const current = this.stateMap.get(tabID);
@@ -599,34 +605,6 @@ export class SplitViewFactory {
     // old sync state from session data, so new split views should no longer
     // consult this hidden pref as a long-term default.
     clearPref("syncEnabled");
-  }
-
-  /**
-   * Register an event listener and track it for cleanup
-   */
-  private static trackEventListener(
-    state: SplitTabState,
-    target: EventTarget,
-    type: string,
-    listener: EventListener,
-    options?: boolean | AddEventListenerOptions,
-  ) {
-    target.addEventListener(type, listener, options);
-    state.eventListeners.push({ target, type, listener, options });
-  }
-
-  /**
-   * Register a timeout and track it for cleanup
-   */
-  private static trackTimeout(
-    state: SplitTabState,
-    callback: () => void,
-    delay: number,
-  ): number {
-    const win = Zotero.getMainWindow();
-    const id = win.setTimeout(callback, delay);
-    state.timeoutIds.push(id);
-    return id;
   }
 
   static registerContextMenu() {
@@ -909,7 +887,7 @@ export class SplitViewFactory {
   }
 
   private static scheduleSyncRestart(tabID: string, state: SplitTabState) {
-    this.trackTimeout(
+    this.resourceTracker.trackTimeout(
       state,
       () => {
         const current = this.stateMap.get(tabID);
@@ -935,7 +913,11 @@ export class SplitViewFactory {
 
     // Single delayed call to ensure async updates complete
     // (Replaced multiple 50ms/150ms/300ms calls with a single 300ms call)
-    this.trackTimeout(state, () => splitContextPane.showForSplitView(win), 300);
+    this.resourceTracker.trackTimeout(
+      state,
+      () => splitContextPane.showForSplitView(win),
+      300,
+    );
 
     // Tab selection events call showForSplitView() through the shared notifier.
   }
