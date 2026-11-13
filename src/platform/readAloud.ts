@@ -70,6 +70,20 @@ export function syncEnabledVoicesToNativeReaders(voices: any): void {
   }
 }
 
+export function pauseNativeReaders(): void {
+  try {
+    for (const reader of (Zotero.Reader as any)._readers || []) {
+      try {
+        reader?.toggleReadAloudPaused?.(true);
+      } catch (error) {
+        Zotero.logError(error as Error);
+      }
+    }
+  } catch {
+    // Reader internals may be unavailable during shutdown.
+  }
+}
+
 export function observeEnabledVoicesWrites(
   callback: (voices: any) => void,
 ): () => void {

@@ -70,6 +70,27 @@ test("Zotero 8 sync services alone do not enable Read Aloud", () => {
   assert.equal(platform.isReadAloudAvailable(), false);
 });
 
+test("pausing native readers skips unsupported readers and reports failures", () => {
+  const { platform, globals } = runtime();
+  const paused = [];
+  const errors = [];
+  globals.Zotero.Reader._readers = [
+    { toggleReadAloudPaused: (value) => paused.push(value) },
+    null,
+    {
+      toggleReadAloudPaused: () => {
+        throw new Error("reader closing");
+      },
+    },
+  ];
+  globals.Zotero.logError = (error) => errors.push(error.message);
+
+  platform.pauseNativeReaders();
+
+  assert.deepEqual(paused, [true]);
+  assert.deepEqual(errors, ["reader closing"]);
+});
+
 test("all remote operations reject in the content realm on API failure", async () => {
   const { platform, api, targetWindow } = runtime();
   for (const key of Object.keys(api)) {

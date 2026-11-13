@@ -15,6 +15,8 @@ import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
 import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
 import { SplitReadAloudService } from "./splitView/readAloud";
+import { SplitReadAloudCoordinator } from "./splitView/readAloudCoordinator";
+import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -26,6 +28,13 @@ import {
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
+  private static readAloudCoordinator = new SplitReadAloudCoordinator({
+    states: () => this.stateMap.values(),
+    getState: (id) => this.stateMap.get(id),
+    getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
+    setAudioStatus: (id, status) => this.setSplitTabAudioStatus(id, status),
+    pauseOtherReaders: pauseNativeReaders,
+  });
   private static tabHooks = new TabHooks({
     hasSplit: (id) => this.hasActiveSplitState(id),
     findRightItem: (itemID) =>
@@ -33,8 +42,8 @@ export class SplitViewFactory {
         (state) => state.rightItemID === itemID && !state.isCleaningUp,
       )?.tabID || null,
     getTitle: (tab) => this.getSplitViewTitleForTab(tab),
-    toggleAudio: (id) => this.toggleActiveReadAloud(id),
-    pauseSplitAudio: () => this.pauseAllSplitReadAloud(),
+    toggleAudio: (id) => this.readAloudCoordinator.toggleActive(id),
+    pauseSplitAudio: () => this.readAloudCoordinator.pauseAll(),
   });
   private static session = new SplitSession(
     (id, data) => this.restoreSplitViewFromSession(id, data),
@@ -70,7 +79,8 @@ export class SplitViewFactory {
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
-    isActive: (browser) => !!this.getActiveSplitReaderInfoByBrowser(browser),
+    isActive: (browser) =>
+      !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
   /** Global tab notifier ID - shared across all split view tabs */
   private static globalTabNotifierID: string | null = null;
@@ -568,7 +578,10 @@ export class SplitViewFactory {
         const getContextMenuSide = () => {
           const s = this.stateMap.get(readerTabID);
           if (!s || s.isCleaningUp) return null;
-          const readerSide = this.getReaderSide(readerTabID, reader as any);
+          const readerSide = this.readAloudCoordinator.getReaderSide(
+            readerTabID,
+            reader as any,
+          );
           return readerSide || s.activeSide || null;
         };
         const contextMenuSide = isInSplitView ? getContextMenuSide() : null;
@@ -609,7 +622,10 @@ export class SplitViewFactory {
             const s = this.stateMap.get(readerTabID);
             if (!s || s.isCleaningUp) return null;
             return (
-              this.getReaderSide(readerTabID, reader as any) || s.activeSide
+              this.readAloudCoordinator.getReaderSide(
+                readerTabID,
+                reader as any,
+              ) || s.activeSide
             );
           };
 
@@ -645,7 +661,10 @@ export class SplitViewFactory {
 
               if (currentlyInSplitView) {
                 const clickedSide =
-                  this.getReaderSide(readerTabID, reader as any) ||
+                  this.readAloudCoordinator.getReaderSide(
+                    readerTabID,
+                    reader as any,
+                  ) ||
                   currentTabState?.activeSide ||
                   "right";
                 // Pass the side to close (the one we clicked on)
@@ -1099,69 +1118,6 @@ export class SplitViewFactory {
     this.session.prepareClose(tabID, itemID);
   }
 
-  /**
-   * Determine which side (left/right) a reader belongs to based on itemID
-   */
-  private static getReaderSide(
-    tabID: string,
-    reader: any,
-  ): "left" | "right" | null {
-    const state = this.stateMap.get(tabID);
-    if (!state) return null;
-
-    try {
-      // Same-PDF split views expose the same itemID on both embedded readers,
-      // so itemID-based side detection is ambiguous there.
-      if (state.leftItemID === state.rightItemID) {
-        return null;
-      }
-      if (reader.itemID === state.leftItemID) {
-        return "left";
-      }
-      if (reader.itemID === state.rightItemID) {
-        return "right";
-      }
-    } catch (e) {
-      Zotero.debug(`Split view: getReaderSide error: ${e}`);
-      return null;
-    }
-
-    return null;
-  }
-
-  private static getReaderSideByBrowser(
-    tabID: string,
-    browser: XULBrowserElement,
-  ): "left" | "right" | null {
-    const state = this.stateMap.get(tabID);
-    if (!state) return null;
-    if (browser === state.leftBrowser) return "left";
-    if (browser === state.rightBrowser) return "right";
-    return null;
-  }
-
-  private static getActiveSplitReaderInfoByBrowser(
-    browser: XULBrowserElement,
-  ): { state: SplitTabState; side: "left" | "right" } | null {
-    for (const state of this.stateMap.values()) {
-      if (state.isCleaningUp) continue;
-      if (browser === state.leftBrowser) {
-        return { state, side: "left" };
-      }
-      if (browser === state.rightBrowser) {
-        return { state, side: "right" };
-      }
-    }
-    return null;
-  }
-
-  private static getBrowserBySide(
-    state: SplitTabState,
-    side: "left" | "right",
-  ): XULBrowserElement {
-    return side === "left" ? state.leftBrowser : state.rightBrowser;
-  }
-
   private static setSplitTabAudioStatus(tabID: string, status: any): void {
     try {
       const win = Zotero.getMainWindow();
@@ -1171,186 +1127,6 @@ export class SplitViewFactory {
       }
     } catch (e) {
       Zotero.debug(`Split view: setSplitTabAudioStatus failed: ${e}`);
-    }
-  }
-
-  private static pauseReadAloudInBrowser(
-    browser: XULBrowserElement,
-    paused = true,
-  ): void {
-    try {
-      const reader = readerRuntime.getInternalReaderFromBrowser(browser);
-      reader?.toggleReadAloudPaused?.(paused);
-    } catch (e) {
-      Zotero.debug(`Split view: pauseReadAloudInBrowser failed: ${e}`);
-    }
-  }
-
-  private static pauseAllSplitReadAloud(): void {
-    for (const state of this.stateMap.values()) {
-      if (state.isCleaningUp) continue;
-      for (const browser of [state.leftBrowser, state.rightBrowser]) {
-        this.pauseReadAloudInBrowser(browser, true);
-      }
-    }
-  }
-
-  private static pauseReadAloudExcept(
-    tabID: string,
-    activeBrowser: XULBrowserElement,
-  ): void {
-    const activeState = this.stateMap.get(tabID);
-    if (!activeState || activeState.isCleaningUp) return;
-
-    for (const state of this.stateMap.values()) {
-      if (state.isCleaningUp) continue;
-      for (const browser of [state.leftBrowser, state.rightBrowser]) {
-        if (browser !== activeBrowser) {
-          this.pauseReadAloudInBrowser(browser, true);
-        }
-      }
-    }
-
-    try {
-      const readers = (Zotero.Reader as any)._readers || [];
-      for (const reader of readers) {
-        try {
-          reader?.toggleReadAloudPaused?.(true);
-        } catch (e) {
-          Zotero.logError(e as Error);
-        }
-      }
-    } catch {
-      // Ignore if Zotero.Reader internals are unavailable
-    }
-  }
-
-  private static handleReadAloudStatus(
-    tabID: string,
-    browser: XULBrowserElement,
-    status: any,
-  ): void {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    const side = this.getReaderSideByBrowser(tabID, browser);
-    if (side) {
-      state.readAloudStatuses[side] = status || null;
-
-      const otherSide = side === "left" ? "right" : "left";
-      const otherStatus = state.readAloudStatuses[otherSide];
-      const sidePlaying = !!status?.active && !status.paused;
-      const otherPlaying = !!otherStatus?.active && !otherStatus.paused;
-
-      if (sidePlaying) {
-        state.readAloudSide = side;
-      } else if (!status?.active) {
-        if (state.readAloudSide === side) {
-          state.readAloudSide = otherStatus?.active ? otherSide : null;
-        }
-      } else if (!otherPlaying && !state.readAloudSide) {
-        state.readAloudSide = side;
-      } else if (otherPlaying && state.readAloudSide === side) {
-        state.readAloudSide = otherSide;
-      }
-    }
-
-    if (status?.active && !status.paused) {
-      try {
-        browser.docShellIsActive = true;
-      } catch {
-        // Ignore browser activation errors
-      }
-      this.pauseReadAloudExcept(tabID, browser);
-    }
-
-    this.setSplitTabAudioStatus(
-      tabID,
-      this.getSplitTabReadAloudStatus(state, status),
-    );
-  }
-
-  private static clearReadAloudStateForSide(
-    state: SplitTabState,
-    side: "left" | "right",
-  ): void {
-    state.readAloudStatuses[side] = null;
-
-    if (state.readAloudSide === side) {
-      const otherSide = side === "left" ? "right" : "left";
-      state.readAloudSide = state.readAloudStatuses[otherSide]?.active
-        ? otherSide
-        : null;
-    }
-
-    this.setSplitTabAudioStatus(
-      state.tabID,
-      this.getSplitTabReadAloudStatus(state, {
-        active: false,
-        paused: false,
-      }),
-    );
-  }
-
-  private static getSplitTabReadAloudStatus(
-    state: SplitTabState,
-    fallbackStatus: any,
-  ): any {
-    const sides: ("left" | "right")[] = ["left", "right"];
-    const playingSide = sides.find((side) => {
-      const status = state.readAloudStatuses[side];
-      return !!status?.active && !status.paused;
-    });
-    if (playingSide) return state.readAloudStatuses[playingSide];
-
-    if (state.readAloudSide) {
-      const status = state.readAloudStatuses[state.readAloudSide];
-      if (status?.active) return status;
-    }
-
-    const activeReadAloudSide = sides.find((side) => {
-      const status = state.readAloudStatuses[side];
-      return !!status?.active;
-    });
-    if (activeReadAloudSide) {
-      return state.readAloudStatuses[activeReadAloudSide];
-    }
-
-    return fallbackStatus ?? { active: false, paused: false };
-  }
-
-  private static getReadAloudTargetSide(
-    state: SplitTabState,
-  ): "left" | "right" {
-    const sides: ("left" | "right")[] = ["left", "right"];
-    const playingSide = sides.find((side) => {
-      const status = state.readAloudStatuses[side];
-      return !!status?.active && !status.paused;
-    });
-    if (playingSide) return playingSide;
-    if (state.readAloudSide) return state.readAloudSide;
-
-    const activeReadAloudSide = sides.find((side) => {
-      const status = state.readAloudStatuses[side];
-      return !!status?.active;
-    });
-    return activeReadAloudSide ?? state.activeSide;
-  }
-
-  private static toggleActiveReadAloud(tabID: string): void {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    const browser = this.getBrowserBySide(
-      state,
-      this.getReadAloudTargetSide(state),
-    );
-    try {
-      readerRuntime
-        .getInternalReaderFromBrowser(browser)
-        ?.toggleReadAloudPaused?.();
-    } catch (e) {
-      Zotero.debug(`Split view: toggleActiveReadAloud failed: ${e}`);
     }
   }
 
@@ -1405,7 +1181,7 @@ export class SplitViewFactory {
     if (oldReader) {
       await readerRuntime.closeReaderWithoutClosingTab(oldReader);
     }
-    this.clearReadAloudStateForSide(state, side);
+    this.readAloudCoordinator.clearSide(state, side);
 
     // Create new browser element
     const doc = oldBrowser.ownerDocument;
@@ -2509,7 +2285,7 @@ export class SplitViewFactory {
         this.readAloud.getReaderConfig(browser, ftl, onStatus),
       callbacks: {
         onReadAloudStatus: (status) =>
-          this.handleReadAloudStatus(tabID, browser, status),
+          this.readAloudCoordinator.handleStatus(tabID, browser, status),
         openContextMenu: (params) =>
           this.openContextMenu(browser, popupset, params),
         toggleSidebar: (open) =>
@@ -2528,7 +2304,7 @@ export class SplitViewFactory {
           else state.rightViewState = stateCopy;
           this.session.write(state);
           if (
-            this.shouldSyncLastReadAloudPositionFromBrowser(
+            this.readAloudCoordinator.shouldSyncLastPosition(
               state,
               browser,
               viewState,
@@ -2683,20 +2459,6 @@ export class SplitViewFactory {
     } catch (e) {
       Zotero.debug(`Split view: installToolbarCloseButton failed: ${e}`);
     }
-  }
-
-  private static shouldSyncLastReadAloudPositionFromBrowser(
-    state: SplitTabState,
-    browser: XULBrowserElement,
-    viewState: any,
-  ): boolean {
-    if (!viewState || !("lastReadAloudPosition" in viewState)) return false;
-
-    const side = this.getReaderSideByBrowser(state.tabID, browser);
-    if (!side) return false;
-
-    const status = state.readAloudStatuses[side];
-    return state.readAloudSide === side && !!status?.active && !status.paused;
   }
 
   /**
@@ -3394,8 +3156,8 @@ export class SplitViewFactory {
     state.disposeAnnotations = undefined;
 
     // Stop active Read Aloud before unloading embedded readers.
-    this.pauseReadAloudInBrowser(leftBrowser, true);
-    this.pauseReadAloudInBrowser(rightBrowser, true);
+    this.readAloudCoordinator.pauseBrowser(leftBrowser, true);
+    this.readAloudCoordinator.pauseBrowser(rightBrowser, true);
     this.setSplitTabAudioStatus(tabID, { active: false, paused: false });
 
     // Unload browsers FIRST to prevent dead object errors from callbacks
