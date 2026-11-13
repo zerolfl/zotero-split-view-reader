@@ -16,18 +16,19 @@ import { PDFSelector } from "./pdfSelector";
 import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
 import { SplitReadAloudService } from "./splitView/readAloud";
 import { SplitReadAloudCoordinator } from "./splitView/readAloudCoordinator";
+import { SplitTabTitleService } from "./splitView/tabTitles";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
-import {
-  getSplitViewTabTitleForItems,
-  type SplitTabsTitleMode,
-} from "../utils/splitTabTitle";
 
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
+  private static tabTitles = new SplitTabTitleService({
+    getStates: () => this.stateMap.values(),
+    getState: (id) => this.stateMap.get(id),
+  });
   private static readAloudCoordinator = new SplitReadAloudCoordinator({
     states: () => this.stateMap.values(),
     getState: (id) => this.stateMap.get(id),
@@ -41,7 +42,7 @@ export class SplitViewFactory {
       [...this.stateMap.values()].find(
         (state) => state.rightItemID === itemID && !state.isCleaningUp,
       )?.tabID || null,
-    getTitle: (tab) => this.getSplitViewTitleForTab(tab),
+    getTitle: (tab) => this.tabTitles.getTitleForTab(tab),
     toggleAudio: (id) => this.readAloudCoordinator.toggleActive(id),
     pauseSplitAudio: () => this.readAloudCoordinator.pauseAll(),
   });
@@ -91,10 +92,6 @@ export class SplitViewFactory {
     null,
     null,
   ];
-  /** Preference observer ID for split tab titles - renames open split view tabs */
-  private static splitTabsTitlePrefObserverID: symbol | null = null;
-  /** Item notifier ID for split tab title updates when either side's item changes */
-  private static splitTabTitleItemNotifierID: string | null = null;
   /** Last tab that opened Zotero's tab context menu. */
   private static tabShowInLibraryContext: {
     tabID: string;
@@ -278,139 +275,12 @@ export class SplitViewFactory {
     return null;
   }
 
-  /**
-   * Get the configured split tab title mode.
-   */
-  private static getSplitTabsTitleMode(): SplitTabsTitleMode {
-    const mode = getPref("splitTabsTitle");
-    if (
-      mode === "titleCreatorYear" ||
-      mode === "creatorYearTitle" ||
-      mode === "attachmentTitle" ||
-      mode === "filename"
-    ) {
-      return mode;
-    }
-    return "filename";
-  }
-
-  /**
-   * Rename a split-view tab using the plugin-specific tab title mode.
-   */
-  private static async renameSplitViewTab(tabID: string): Promise<void> {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    try {
-      const leftItem = Zotero.Items.get(state.leftItemID);
-      const rightItem = Zotero.Items.get(state.rightItemID);
-      if (!leftItem || !rightItem) return;
-
-      const title = await getSplitViewTabTitleForItems(
-        leftItem,
-        rightItem,
-        this.getSplitTabsTitleMode(),
-      );
-      const win = Zotero.getMainWindow();
-      const Zotero_Tabs = tabsForWindow(win);
-      await Zotero_Tabs.rename(tabID, title);
-    } catch (e) {
-      Zotero.debug(`Split view: renameSplitViewTab failed: ${e}`);
-    }
-  }
-
-  /**
-   * Rename all currently open split-view tabs.
-   */
-  private static async renameAllSplitViewTabs(): Promise<void> {
-    for (const tabID of this.stateMap.keys()) {
-      await this.renameSplitViewTab(tabID);
-    }
-  }
-
-  /**
-   * Build the title for a split-view tab from stored tab data.
-   */
-  private static async getSplitViewTitleForTab(tab: any): Promise<string> {
-    const leftItemID = tab?.data?.leftItemID ?? tab?.data?.itemID;
-    const rightItemID =
-      tab?.data?.rightItemID ?? tab?.data?.leftItemID ?? tab?.data?.itemID;
-    const leftItem = leftItemID ? Zotero.Items.get(leftItemID) : null;
-    const rightItem = rightItemID ? Zotero.Items.get(rightItemID) : null;
-    if (!leftItem || !rightItem) {
-      return "";
-    }
-
-    return getSplitViewTabTitleForItems(
-      leftItem,
-      rightItem,
-      this.getSplitTabsTitleMode(),
-    );
-  }
-
-  /**
-   * Refresh titles of all open split-view tabs.
-   * Mirrors Zotero's native reader tab-title refresh behavior.
-   */
   static refreshOpenSplitViewTabTitles(): void {
-    void this.renameAllSplitViewTabs();
+    this.tabTitles.refreshOpenTabs();
   }
 
-  /**
-   * Refresh split-view tab titles affected by item changes.
-   * Zotero's native tab title observer only checks tab.data.itemID, which is
-   * the left-side item for split tabs, so right-side attachment/parent changes
-   * need to be handled by this plugin.
-   */
-  private static async renameSplitViewTabsForChangedItems(
-    ids: (string | number)[],
-  ): Promise<void> {
-    const changedItemIDs = new Set(
-      ids.map((id) => Number(id)).filter((id) => Number.isInteger(id)),
-    );
-    if (!changedItemIDs.size) return;
-
-    for (const [tabID, state] of this.stateMap.entries()) {
-      if (state.isCleaningUp) continue;
-      if (
-        changedItemIDs.has(state.leftItemID) ||
-        changedItemIDs.has(state.rightItemID) ||
-        changedItemIDs.has(state.leftParentItemID) ||
-        changedItemIDs.has(state.rightParentItemID)
-      ) {
-        await this.renameSplitViewTab(tabID);
-      }
-    }
-  }
-
-  /**
-   * Register an item observer to keep split tab titles in sync for both panes.
-   */
   static registerSplitTabTitleItemNotifier() {
-    if (this.splitTabTitleItemNotifierID) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    const notifierCallback = {
-      notify: (
-        action: string,
-        type: string,
-        ids: (string | number)[],
-        _extraData: any,
-      ) => {
-        if (type !== "item") return;
-        if (action !== "modify" && action !== "refresh") return;
-
-        void self.renameSplitViewTabsForChangedItems(ids);
-      },
-    };
-
-    this.splitTabTitleItemNotifierID = Zotero.Notifier.registerObserver(
-      notifierCallback,
-      ["item"],
-      "splitViewTabTitle",
-      30,
-    );
+    this.tabTitles.registerItemNotifier();
   }
 
   /**
@@ -838,13 +708,7 @@ export class SplitViewFactory {
       this.scrollbarPrefObserverIDs[i] = id;
     });
 
-    this.splitTabsTitlePrefObserverID = Zotero.Prefs.registerObserver(
-      `${prefix}.splitTabsTitle`,
-      () => {
-        this.refreshOpenSplitViewTabTitles();
-      },
-      true,
-    );
+    this.tabTitles.registerPreferenceObserver(`${prefix}.splitTabsTitle`);
 
     this.readAloud.register();
   }
@@ -949,26 +813,7 @@ export class SplitViewFactory {
         this.scrollbarPrefObserverIDs[i] = null;
       }
     });
-    if (this.splitTabsTitlePrefObserverID) {
-      try {
-        Zotero.Prefs.unregisterObserver(this.splitTabsTitlePrefObserverID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: unregisterAll - unregisterObserver(splitTabsTitle) failed: ${e}`,
-        );
-      }
-      this.splitTabsTitlePrefObserverID = null;
-    }
-    if (this.splitTabTitleItemNotifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(this.splitTabTitleItemNotifierID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: unregisterAll - unregisterObserver(splitTabTitleItem) failed: ${e}`,
-        );
-      }
-      this.splitTabTitleItemNotifierID = null;
-    }
+    this.tabTitles.unregister();
     this.readAloud.unregister();
 
     // Restore Zotero_Tabs.getTabIDByItemID to avoid holding references and stale tab IDs
@@ -1341,7 +1186,7 @@ export class SplitViewFactory {
       // Update tab data
       this.updateTabDataForSession(tabID);
 
-      await this.renameSplitViewTab(tabID);
+      await this.tabTitles.renameTab(tabID);
 
       // Restart sync if a primary view is active
       if (hadPrimary) {
@@ -1498,7 +1343,7 @@ export class SplitViewFactory {
 
       // 13. Update tab data and title
       this.updateTabDataForSession(tabID);
-      await this.renameSplitViewTab(tabID);
+      await this.tabTitles.renameTab(tabID);
 
       // 14. Restart sync if a primary view is active
       if (hadPrimary) {
@@ -1912,7 +1757,7 @@ export class SplitViewFactory {
 
       // 10. Update tab data and title (include split view state for session restore)
       this.session.write(newState);
-      await this.renameSplitViewTab(tabID);
+      await this.tabTitles.renameTab(tabID);
     } catch (e) {
       this.cleanupTab(tabID);
       throw e;
@@ -2256,7 +2101,7 @@ export class SplitViewFactory {
 
       // 9. Update tab data and title for session restore.
       this.session.write(newState);
-      await this.renameSplitViewTab(tabID);
+      await this.tabTitles.renameTab(tabID);
     } catch (e) {
       this.cleanupTab(tabID);
       throw e;
