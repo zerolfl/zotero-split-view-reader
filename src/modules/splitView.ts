@@ -1,6 +1,7 @@
 import { bindSplitAnnotations } from "./splitView/annotations";
 import { SplitLayout } from "./splitView/layout";
 import { SplitSync } from "./splitView/sync";
+import { SplitReaderHost } from "./splitView/readerHost";
 import { annotationStore } from "../platform/annotationStore";
 import { reportAnnotationFailure } from "../platform/readerAnnotations";
 import { SplitSession } from "./splitView/session";
@@ -63,6 +64,7 @@ export class SplitViewFactory {
       popup.startCloseTimer(2000);
     },
   });
+  private static readerHost = new SplitReaderHost();
   private static pdfSelector = new PDFSelector();
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
@@ -2495,229 +2497,80 @@ export class SplitViewFactory {
     viewState?: any,
     isRight: boolean = false,
   ): Promise<void> {
-    await readerRuntime.waitForBrowserLoad(browser);
-
-    const win = browser.contentWindow;
-    if (!win) throw new Error("Browser contentWindow not available");
-
-    const wrappedWin = (win as any).wrappedJSObject || win;
-    const mainWindow = Zotero.getMainWindow();
-
-    // Get PDF data URL
-    const data = {
-      url: `zotero://attachment/${Zotero.API.getLibraryPrefix(item.libraryID)}/items/${item.key}/`,
-    };
-
-    // Prepare Fluent localization data
-    const ftl: string[] = [];
-    try {
-      ftl.push(
-        Zotero.File.getContentsFromURL("chrome://zotero/locale/zotero.ftl"),
-      );
-    } catch {
-      // Ignore FTL loading errors
-    }
-    try {
-      ftl.push(
-        Zotero.File.getContentsFromURL("chrome://zotero/locale/reader.ftl"),
-      );
-    } catch {
-      // Ignore FTL loading errors
-    }
-
-    // Store references for callbacks
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    const itemRef = item;
-    const browserRef = browser;
-    const popupsetRef = popupset;
-    const readAloudConfig = await this.readAloud.getReaderConfig(
+    await this.readerHost.initialize({
       browser,
-      ftl,
-      (status) => this.handleReadAloudStatus(tabID, browser, status),
-    );
-
-    // Only show context pane toggle button on the RIGHT browser
-    // The right reader's toggle controls the global context pane
-    const showContextPaneToggle = isRight;
-    const mainWin = Zotero.getMainWindow();
-    const contextPaneOpen = isRight
-      ? !((mainWin as any).ZoteroContextPane?.collapsed ?? true)
-      : false;
-
-    // bottomPlaceholderHeight controls stackedView in reader-ui.js:
-    //   let stackedView = state.bottomPlaceholderHeight !== null;
-    // When stackedView = true, the toggle button uses a different icon (bottom sidebar)
-    // and is always shown regardless of contextPaneOpen.
-    // For standard (non-stacked) layout, this MUST be null so the toggle hides when
-    // context pane opens and uses the correct sidebar icon.
-    const isStacked = Zotero.Prefs.get("layout") === "stacked";
-    const bottomPlaceholderHeight = isStacked ? 0 : null;
-
-    // Create internal reader config - all callbacks defined inline, clone entire object once
-    const readerConfig = {
-      type: "pdf",
-      data,
-      annotations: await annotationStore.load(item),
-      readOnly: annotationStore.isReadOnly(item),
-      authorName:
-        item.library.libraryType === "group"
-          ? Zotero.Users.getCurrentName()
-          : "",
-      showContextPaneToggle,
-      contextPaneOpen, // Right browser shows toggle to control global context pane
-      sidebarWidth: 240,
-      sidebarOpen: false, // Default to collapsed in split view
-      bottomPlaceholderHeight,
-      rtl: (Zotero as any).rtl,
-      fontSize: Zotero.Prefs.get("fontSize"),
-      ftl,
-      showAnnotations: true,
-      // Additional reader preferences
-      textSelectionAnnotationMode: Zotero.Prefs.get(
-        "reader.textSelectionAnnotationMode",
-      ),
-      customThemes:
-        (Zotero as any).SyncedSettings?.get(
-          Zotero.Libraries.userLibraryID,
-          "readerCustomThemes",
-        ) ?? [],
-      lightTheme: Zotero.Prefs.get("reader.lightTheme"),
-      darkTheme: Zotero.Prefs.get("reader.darkTheme"),
-      fontFamily: Zotero.Prefs.get("reader.ebookFontFamily"),
-      hyphenate: Zotero.Prefs.get("reader.ebookHyphenate"),
-      autoDisableNoteTool: Zotero.Prefs.get("reader.autoDisableTool.note"),
-      autoDisableTextTool: Zotero.Prefs.get("reader.autoDisableTool.text"),
-      autoDisableImageTool: Zotero.Prefs.get("reader.autoDisableTool.image"),
-      sidebarView: Zotero.Prefs.get("reader.lastSidebarTab"),
-      ...readAloudConfig,
-      // Pass viewState to restore position
-      primaryViewState: viewState,
-      // Required callbacks - defined as regular functions
-      onOpenContextMenu: () => {
-        const params = wrappedWin.contextMenuParams;
-        if (params) {
-          self.openContextMenu(browserRef, popupsetRef, params);
-        }
-      },
-      onToggleSidebar: (open: boolean) => {
-        // Sync sidebar toggle when sync is enabled
-        self.handleSidebarToggle(tabID, browserRef, open);
-      },
-      onChangeSidebarWidth: (_width: number) => {
-        // No-op for split view
-      },
-      onChangeViewState: (viewState: any, _primary: boolean) => {
-        // Track view state for saving to disk later
-        const s = self.stateMap.get(tabID);
-        if (
-          s &&
-          !s.isCleaningUp &&
-          (browserRef === s.leftBrowser || browserRef === s.rightBrowser)
-        ) {
-          const isLeft = browserRef === s.leftBrowser;
-          const stateCopy = JSON.parse(JSON.stringify(viewState));
-          if (isLeft) {
-            s.leftViewState = stateCopy;
-          } else {
-            s.rightViewState = stateCopy;
-          }
-          self.session.write(s);
+      item,
+      viewState,
+      isRight,
+      getReadAloudConfig: (ftl, onStatus) =>
+        this.readAloud.getReaderConfig(browser, ftl, onStatus),
+      callbacks: {
+        onReadAloudStatus: (status) =>
+          this.handleReadAloudStatus(tabID, browser, status),
+        openContextMenu: (params) =>
+          this.openContextMenu(browser, popupset, params),
+        toggleSidebar: (open) => this.handleSidebarToggle(tabID, browser, open),
+        onViewStateChange: (viewState) => {
+          const state = this.stateMap.get(tabID);
           if (
-            self.shouldSyncLastReadAloudPositionFromBrowser(
-              s,
-              browserRef,
+            !state ||
+            state.isCleaningUp ||
+            (browser !== state.leftBrowser && browser !== state.rightBrowser)
+          )
+            return;
+          const isLeft = browser === state.leftBrowser;
+          const stateCopy = JSON.parse(JSON.stringify(viewState));
+          if (isLeft) state.leftViewState = stateCopy;
+          else state.rightViewState = stateCopy;
+          this.session.write(state);
+          if (
+            this.shouldSyncLastReadAloudPositionFromBrowser(
+              state,
+              browser,
               viewState,
             )
-          ) {
-            attachmentState.syncLastReadAloudPositionToItem(itemRef, viewState);
+          )
+            attachmentState.syncLastReadAloudPositionToItem(item, viewState);
+        },
+        saveAnnotations: async (annotations, callback, readerWindow) => {
+          try {
+            await annotationStore.save(item.id, annotations, readerWindow);
+          } catch (error) {
+            reportAnnotationFailure(browser, error);
+          } finally {
+            callback?.();
           }
-        }
-      },
-      onSaveAnnotations: async (annotations: any[], callback: () => void) => {
-        try {
-          await annotationStore.save(itemRef.id, annotations, win);
-        } catch (error) {
-          reportAnnotationFailure(browserRef, error);
-        } finally {
-          callback?.();
-        }
-      },
-      onDeleteAnnotations: (ids: string[]) => {
-        void annotationStore
-          .remove(itemRef.id, ids)
-          .catch((error) => reportAnnotationFailure(browserRef, error));
-      },
-      onAddToNote: (_annotations: any[]) => {
-        // No-op for split view
-      },
-      onOpenTagsPopup: (_id: string, _x: number, _y: number) => {
-        // Tags popup not implemented for split view
-      },
-      onClosePopup: () => {
-        // No-op
-      },
-      onOpenLink: (url: string) => {
-        Zotero.launchURL(url);
-      },
-      onCopyImage: (_dataURL: string) => {
-        // Image copy not implemented for split view
-      },
-      onSaveImageAs: (_dataURL: string) => {
-        // Save image not implemented for split view
-      },
-      onSetDataTransferAnnotations: (
-        _dataTransfer: any,
-        _annotations: any[],
-        _fromText: boolean,
-      ) => {
-        // Drag-drop not implemented for split view
-      },
-      onToggleContextPane: () => {
-        // Toggle global context pane
-        const mainWin = Zotero.getMainWindow();
-        if ((mainWin as any).ZoteroContextPane) {
-          (mainWin as any).ZoteroContextPane.togglePane();
-          // Update right reader's contextPaneOpen state after toggle
-          // This controls whether the toggle button shows in the toolbar
+        },
+        deleteAnnotations: (ids) => {
+          void annotationStore
+            .remove(item.id, ids)
+            .catch((error) => reportAnnotationFailure(browser, error));
+        },
+        toggleContextPane: () => {
+          const mainWindow = Zotero.getMainWindow();
+          const contextPane = (mainWindow as any).ZoteroContextPane;
+          if (!contextPane) return;
+          contextPane.togglePane();
           setTimeout(() => {
-            const s = self.stateMap.get(tabID);
-            if (s?.rightBrowser) {
-              const isOpen = !(
-                (mainWin as any).ZoteroContextPane?.collapsed ?? true
-              );
-              self.setContextPaneOpenForBrowser(s.rightBrowser, isOpen);
-            }
+            const state = this.stateMap.get(tabID);
+            if (!state?.rightBrowser) return;
+            const isOpen = !(
+              (mainWindow as any).ZoteroContextPane?.collapsed ?? true
+            );
+            this.setContextPaneOpenForBrowser(state.rightBrowser, isOpen);
           }, 50);
-        }
+        },
+        afterReady: () => {
+          this.installToolbarCloseButton(
+            tabID,
+            browser,
+            isRight ? "right" : "left",
+          );
+          if (!isRight) this.hideReaderSidenav(browser);
+          else this.injectContextPaneHandler(browser);
+        },
       },
-    };
-
-    // Clone entire config once with wrapReflectors and cloneFunctions
-    wrappedWin.createReader(
-      Components.utils.cloneInto(readerConfig, win, {
-        wrapReflectors: true,
-        cloneFunctions: true,
-      }),
-    );
-
-    // Wait for internal reader to be ready
-    await readerRuntime.waitForInternalReader(browser);
-
-    this.installToolbarCloseButton(tabID, browser, isRight ? "right" : "left");
-
-    // Only hide the reader's internal sidenav on the LEFT browser
-    // The RIGHT browser keeps its toggle button to control the global context pane
-    if (!isRight) {
-      this.hideReaderSidenav(browser);
-    } else {
-      // Inject a content-side event listener for synchronous context pane state updates.
-      // setContextPaneOpen() uses React's flushSync() which only works when called from
-      // within the content compartment. By injecting a <script>, the listener runs in the
-      // content compartment so flushSync() works correctly, producing a smooth transition
-      // without flicker when the toggle button appears/disappears.
-      this.injectContextPaneHandler(browser);
-    }
+    });
   }
 
   /**
