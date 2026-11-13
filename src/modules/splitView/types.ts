@@ -48,9 +48,7 @@ export interface SplitTabState {
   originalTitle?: string;
   isCleaningUp: boolean;
   isSamePDF: boolean;
-  annotationNotifierID: string | null;
-  isSyncingSelection: boolean;
-  annotationItemIDs: number[];
+  disposeAnnotations?: () => void;
   scrollSyncRAFPending: boolean;
   lastScrollSyncTime: number;
   resizeTimerId: number | null;

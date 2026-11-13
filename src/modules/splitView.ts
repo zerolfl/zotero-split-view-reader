@@ -1,3 +1,6 @@
+import { bindSplitAnnotations } from "./splitView/annotations";
+import { annotationStore } from "../platform/annotationStore";
+import { reportAnnotationFailure } from "../platform/readerAnnotations";
 import { SplitSession } from "./splitView/session";
 import { TabHooks } from "../platform/tabHooks";
 import { tabsForWindow } from "../platform/tabs";
@@ -1641,6 +1644,8 @@ export class SplitViewFactory {
     const container = oldBrowser.parentNode;
 
     if (!container) return null;
+    state.disposeAnnotations?.();
+    state.disposeAnnotations = undefined;
 
     // Close the old reader instance associated with this browser.
     // This removes it from Zotero.Reader._readers and prevents orphaned readers.
@@ -1798,7 +1803,7 @@ export class SplitViewFactory {
 
       // Setup annotation sync if we are now viewing the same PDF
       if (state.isSamePDF) {
-        this.setupAnnotationManagerSync(tabID);
+        bindSplitAnnotations(state);
       }
 
       // Preserve the existing primary side when replacing a PDF in one view.
@@ -1960,7 +1965,7 @@ export class SplitViewFactory {
 
       // 12. Setup annotation sync if same PDF
       if (state.isSamePDF) {
-        this.setupAnnotationManagerSync(tabID);
+        bindSplitAnnotations(state);
       }
 
       // 13. Update tab data and title
@@ -2260,9 +2265,6 @@ export class SplitViewFactory {
       isCleaningUp: false,
       // Different PDF split view - no same PDF sync
       isSamePDF: false,
-      annotationNotifierID: null,
-      isSyncingSelection: false,
-      annotationItemIDs: [],
       scrollSyncRAFPending: false,
       lastScrollSyncTime: 0,
       resizeTimerId: null,
@@ -2600,9 +2602,6 @@ export class SplitViewFactory {
       isCleaningUp: false,
       // Same PDF split view specific
       isSamePDF: true,
-      annotationNotifierID: null,
-      isSyncingSelection: false,
-      annotationItemIDs: item.getAnnotations().map((ann: any) => ann.id),
       scrollSyncRAFPending: false,
       lastScrollSyncTime: 0,
       resizeTimerId: null,
@@ -2691,15 +2690,7 @@ export class SplitViewFactory {
       // Set up focus listeners
       this.setupFocusListeners(tabID, leftBrowser, rightBrowser, win);
 
-      // Hook into both readers' annotation managers to mirror changes
-      // instantly, replicating Zotero's native split view behavior where
-      // both views share one _annotationManager. The render() hook fires
-      // synchronously when an annotation is created/modified/deleted,
-      // bypassing the slow onSaveAnnotations debounce path entirely.
-      this.setupAnnotationManagerSync(tabID);
-
-      // Set up selection sync for same PDF
-      this.setupSelectionSync(tabID);
+      bindSplitAnnotations(newState);
 
       // Finish split-view setup after both readers initialize
       this.trackTimeout(
@@ -2732,82 +2723,6 @@ export class SplitViewFactory {
       this.cleanupTab(tabID);
       throw e;
     }
-  }
-
-  // NOTE: The old Notifier-based setupAnnotationSync and refreshAnnotationsInBothViews
-  // have been removed. Annotation sync for same-PDF split view is now handled by
-  // setupAnnotationManagerSync() which hooks directly into the annotation manager's
-  // render() method for instant, synchronous propagation.
-
-  /**
-   * Set up selection sync for same PDF split view
-   * When an annotation is selected on one side, sync to the other
-   */
-  private static setupSelectionSync(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state || !state.isSamePDF) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    // Helper to clone data into browser's context to avoid permission errors
-    const cloneForBrowser = (browser: XULBrowserElement, data: any) => {
-      try {
-        const win = browser.contentWindow;
-        if (!win) return data;
-        return Components.utils.cloneInto(data, win, { wrapReflectors: true });
-      } catch {
-        return data;
-      }
-    };
-
-    // Set up observers on both readers' internal state
-    const setupObserver = (browser: XULBrowserElement, isLeft: boolean) => {
-      try {
-        const internalReader =
-          readerRuntime.getInternalReaderFromBrowser(browser);
-        if (!internalReader) return;
-
-        // Hook into the reader's annotation selection
-        const originalSetSelectedAnnotationIDs =
-          internalReader.setSelectedAnnotationIDs?.bind(internalReader);
-        if (originalSetSelectedAnnotationIDs) {
-          internalReader.setSelectedAnnotationIDs = (ids: string[]) => {
-            // Call original
-            originalSetSelectedAnnotationIDs(ids);
-
-            // Sync to other side if not already syncing
-            const s = self.stateMap.get(tabID);
-            if (s?.isSamePDF && !s.isSyncingSelection && !s.isCleaningUp) {
-              s.isSyncingSelection = true;
-              try {
-                const otherBrowser = isLeft ? s.rightBrowser : s.leftBrowser;
-                const otherReader =
-                  readerRuntime.getInternalReaderFromBrowser(otherBrowser);
-                if (otherReader?.setSelectedAnnotationIDs) {
-                  // Clone ids array for the other browser's context
-                  const clonedIds = cloneForBrowser(
-                    otherBrowser,
-                    Array.from(ids),
-                  );
-                  otherReader.setSelectedAnnotationIDs(clonedIds);
-                }
-              } finally {
-                const s2 = self.stateMap.get(tabID);
-                if (s2) {
-                  s2.isSyncingSelection = false;
-                }
-              }
-            }
-          };
-        }
-      } catch {
-        // Ignore errors
-      }
-    };
-
-    setupObserver(state.leftBrowser, true);
-    setupObserver(state.rightBrowser, false);
   }
 
   /**
@@ -3196,32 +3111,6 @@ export class SplitViewFactory {
       url: `zotero://attachment/${Zotero.API.getLibraryPrefix(item.libraryID)}/items/${item.key}/`,
     };
 
-    // Get annotations - match Zotero's _getAnnotation method
-    const annotationItems = item.getAnnotations();
-    const annotations = await Promise.all(
-      annotationItems.map(async (annot: Zotero.Item) => {
-        try {
-          if (!annot || !annot.isAnnotation()) {
-            return null;
-          }
-          const json: any = await Zotero.Annotations.toJSON(annot);
-          json.id = annot.key;
-          delete json.key;
-          // Ensure no undefined values for non-array properties (match Zotero's behavior)
-          for (const key in json) {
-            if (!Array.isArray(json[key])) {
-              json[key] = json[key] || "";
-            }
-          }
-          json.tags = json.tags || [];
-          return json;
-        } catch {
-          return null;
-        }
-      }),
-    );
-    const validAnnotations = annotations.filter((a) => a !== null);
-
     // Prepare Fluent localization data
     const ftl: string[] = [];
     try {
@@ -3272,8 +3161,8 @@ export class SplitViewFactory {
     const readerConfig = {
       type: "pdf",
       data,
-      annotations: validAnnotations,
-      readOnly: false,
+      annotations: await annotationStore.load(item),
+      readOnly: annotationStore.isReadOnly(item),
       authorName:
         item.library.libraryType === "group"
           ? Zotero.Users.getCurrentName()
@@ -3351,11 +3240,18 @@ export class SplitViewFactory {
         self.handleViewStateChange(browserRef, viewState);
       },
       onSaveAnnotations: async (annotations: any[], callback: () => void) => {
-        await self.handleAnnotationSave(itemRef, annotations);
-        if (callback) callback();
+        try {
+          await annotationStore.save(itemRef.id, annotations, win);
+        } catch (error) {
+          reportAnnotationFailure(browserRef, error);
+        } finally {
+          callback?.();
+        }
       },
       onDeleteAnnotations: (ids: string[]) => {
-        self.handleAnnotationDelete(itemRef, ids);
+        void annotationStore
+          .remove(itemRef.id, ids)
+          .catch((error) => reportAnnotationFailure(browserRef, error));
       },
       onAddToNote: (_annotations: any[]) => {
         // No-op for split view
@@ -4016,148 +3912,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Hook into both readers' _annotationManager.render() to mirror annotation
-   * changes instantly between the two views, replicating Zotero's native
-   * split view behavior.
-   *
-   * In Zotero's native split view, both views share one _annotationManager.
-   * When an annotation is created/modified/deleted:
-   *   _applyChanges → render() → onRender → _updateState → view.setAnnotations()
-   * This happens SYNCHRONOUSLY, so both views update immediately.
-   *
-   * In our plugin, each browser has its own reader with its own annotation
-   * manager. We hook render() on each to propagate to the other:
-   *   Left AM render() → update left view → copy annotations → right AM render() → update right view
-   *
-   * The DB save (onSaveAnnotations) is completely separate and fires later
-   * via debounced _triggerSaving. We don't need to intercept it for UI sync.
-   */
-  private static setupAnnotationManagerSync(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state || !state.isSamePDF) return;
-
-    const leftReader = readerRuntime.getInternalReaderFromBrowser(
-      state.leftBrowser,
-    );
-    const rightReader = readerRuntime.getInternalReaderFromBrowser(
-      state.rightBrowser,
-    );
-    if (!leftReader || !rightReader) return;
-
-    const leftAM = leftReader._annotationManager;
-    const rightAM = rightReader._annotationManager;
-    if (!leftAM || !rightAM) return;
-
-    let isSyncing = false; // Guard against infinite recursion
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    // Capture original render functions (arrow functions, so `this` is bound to AM instance)
-    const origLeftRender = leftAM.render;
-    const origRightRender = rightAM.render;
-
-    // When left annotation manager renders, mirror state to right
-    leftAM.render = () => {
-      origLeftRender();
-      const s = self.stateMap.get(tabID);
-      if (!isSyncing && s?.isSamePDF && !s.isCleaningUp) {
-        isSyncing = true;
-        try {
-          // Deep-clone annotations across browser compartments via JSON
-          const serialized = JSON.stringify(leftAM._annotations);
-          const parsed = JSON.parse(serialized);
-          // Clone into right browser's compartment for safe cross-compartment access
-          const rightWin = s.rightBrowser.contentWindow;
-          rightAM._annotations = rightWin
-            ? Components.utils.cloneInto(parsed, rightWin, {
-                wrapReflectors: true,
-              })
-            : parsed;
-          origRightRender();
-        } catch (e) {
-          Zotero.debug(`Split view: annotation sync left→right error: ${e}`);
-        } finally {
-          isSyncing = false;
-        }
-      }
-    };
-
-    // When right annotation manager renders, mirror state to left
-    rightAM.render = () => {
-      origRightRender();
-      const s = self.stateMap.get(tabID);
-      if (!isSyncing && s?.isSamePDF && !s.isCleaningUp) {
-        isSyncing = true;
-        try {
-          const serialized = JSON.stringify(rightAM._annotations);
-          const parsed = JSON.parse(serialized);
-          const leftWin = s.leftBrowser.contentWindow;
-          leftAM._annotations = leftWin
-            ? Components.utils.cloneInto(parsed, leftWin, {
-                wrapReflectors: true,
-              })
-            : parsed;
-          origLeftRender();
-        } catch (e) {
-          Zotero.debug(`Split view: annotation sync right→left error: ${e}`);
-        } finally {
-          isSyncing = false;
-        }
-      }
-    };
-
-    Zotero.debug("Split view: annotation manager sync hooks installed");
-  }
-
-  /**
-   * Handle annotation save callback
-   * Uses the same approach as Zotero's reader
-   */
-  private static async handleAnnotationSave(
-    item: Zotero.Item,
-    annotations: any[],
-  ) {
-    const attachment = Zotero.Items.get(item.id);
-    if (!attachment) throw new Error(`Attachment ${item.id} is unavailable`);
-    try {
-      for (const annotation of annotations) {
-        annotation.key = annotation.id;
-        delete annotation.authorName;
-        await Zotero.Annotations.saveFromJSON(attachment, annotation);
-      }
-    } catch {
-      // Ignore annotation save errors
-    }
-  }
-
-  /**
-   * Handle annotation delete callback
-   * Uses the same approach as Zotero's reader
-   */
-  private static async handleAnnotationDelete(
-    item: Zotero.Item,
-    ids: string[],
-  ) {
-    const attachment = Zotero.Items.get(item.id);
-    if (!attachment) throw new Error(`Attachment ${item.id} is unavailable`);
-    const libraryID = attachment.libraryID;
-    try {
-      for (const key of ids) {
-        const annotation = Zotero.Items.getByLibraryAndKey(libraryID, key);
-        if (
-          annotation &&
-          annotation.isAnnotation() &&
-          annotation.parentID === item.id
-        ) {
-          await annotation.eraseTx();
-        }
-      }
-    } catch {
-      // Ignore annotation delete errors
-    }
-  }
-
-  /**
    * Handle sidebar toggle - sync to the other reader when sync is enabled
    * Pauses scroll sync during sidebar animation to prevent position drift
    */
@@ -4506,6 +4260,8 @@ export class SplitViewFactory {
 
     const leftBrowser = state.leftBrowser;
     const rightBrowser = state.rightBrowser;
+    state.disposeAnnotations?.();
+    state.disposeAnnotations = undefined;
 
     // Stop active Read Aloud before unloading embedded readers.
     this.pauseReadAloudInBrowser(leftBrowser, true);
@@ -4523,7 +4279,6 @@ export class SplitViewFactory {
     const toolbarCloseObservers = [...state.toolbarCloseObservers];
     const sidebarToggleTimers = [...state.sidebarToggleTimers];
     const resizeTimerId = state.resizeTimerId;
-    const annotationNotifierID = state.annotationNotifierID;
     const contextPaneObserver = (state as any).contextPaneObserver;
     const dragOverlay = state.dragOverlay;
 
@@ -4535,7 +4290,6 @@ export class SplitViewFactory {
     state.leftViewerContainer = null;
     state.rightViewerContainer = null;
     state.resizeTimerId = null;
-    state.annotationNotifierID = null;
     state.dragOverlay = null;
     (state as any).contextPaneObserver = null;
 
@@ -4632,17 +4386,6 @@ export class SplitViewFactory {
             `Split view: cleanup ${tabID} - clearTimeout(resize) failed: ${e}`,
           );
         }
-      }
-    }
-
-    // Unregister annotation sync notifier (same PDF split view)
-    if (annotationNotifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(annotationNotifierID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - unregisterObserver(annotation) failed: ${e}`,
-        );
       }
     }
 

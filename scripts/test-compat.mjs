@@ -17,6 +17,7 @@ const ctx = await Config.loadConfig({
   test: {
     headless: false,
     watch: false,
+    prefs: { "app.update.auto": false },
     hooks: {
       "test:prebuild": async (context) => {
         const path = resolve(context.dist, "addon/manifest.json");

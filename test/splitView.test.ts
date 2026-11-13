@@ -3,6 +3,7 @@ import { config } from "../package.json";
 import { SplitViewFactory } from "../src/modules/splitView";
 import { readerRuntime } from "../src/platform/readerRuntime";
 import { readerView } from "../src/platform/readerView";
+import { annotationStore } from "../src/platform/annotationStore";
 import { createPDFAttachment } from "./fixtures/pdf";
 
 describe("split reader integration", function () {
@@ -11,6 +12,8 @@ describe("split reader integration", function () {
   let left: Zotero.Item;
   let right: Zotero.Item;
   let globals: Record<string, PropertyDescriptor | undefined>;
+  let errors: string[];
+  let logError: typeof Zotero.logError;
 
   before(async function () {
     const instance = Zotero[config.addonInstance];
@@ -26,7 +29,17 @@ describe("split reader integration", function () {
     right = await createPDFAttachment("Right PDF");
   });
 
+  beforeEach(function () {
+    errors = [];
+    logError = Zotero.logError;
+    Zotero.logError = (error: any) => {
+      errors.push(String(error));
+      logError.call(Zotero, error);
+    };
+  });
+
   afterEach(async function () {
+    Zotero.logError = logError;
     for (const tabID of [...factory.stateMap.keys()])
       factory.closeSplitTab(tabID);
     const tabs = Zotero.getMainWindow().Zotero_Tabs;
@@ -57,6 +70,38 @@ describe("split reader integration", function () {
     assert.ok(state);
     await Zotero.Promise.delay(700);
     return state;
+  }
+
+  async function waitFor(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      if (check()) return;
+      await Zotero.Promise.delay(30);
+    }
+    assert.fail(
+      `Timed out waiting for annotation persistence: ${errors.join("; ")}`,
+    );
+  }
+
+  function contentData(browser: XULBrowserElement, value: any): any {
+    return Components.utils.cloneInto(value, browser.contentWindow!, {
+      wrapReflectors: true,
+    });
+  }
+
+  function addNote(state: any, side: "left" | "right") {
+    const browser = state[`${side}Browser`];
+    const reader = readerRuntime.getInternalReaderFromBrowser(browser);
+    reader._annotationManager._skipAnnotationSavingDebounce = true;
+    return reader._annotationManager.addAnnotation(
+      contentData(browser, {
+        type: "note",
+        color: "#ffd400",
+        sortIndex: "00000|000001|00000",
+        pageLabel: "1",
+        comment: "Initial comment",
+        position: { pageIndex: 0, rects: [[72, 700, 92, 720]] },
+      }),
+    );
   }
 
   it("creates two PDF readers and keeps page positions independent without a primary side", async function () {
@@ -138,5 +183,123 @@ describe("split reader integration", function () {
       0,
       "restored right position",
     );
+  });
+
+  it("mirrors same-PDF annotations and selections and persists changes from either side", async function () {
+    const state = await open(true);
+    const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
+    const second = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    const note = addNote(state, "left");
+    assert.ok(
+      second._state.annotations.find((item: any) => item.id === note.id),
+      errors.join("; "),
+    );
+    await waitFor(
+      () => !!Zotero.Items.getByLibraryAndKey(left.libraryID, note.id),
+    );
+    first.setSelectedAnnotations(contentData(state.leftBrowser, [note.id]));
+    assert.deepEqual(Array.from(second._state.selectedAnnotationIDs), [
+      note.id,
+    ]);
+    second._annotationManager._skipAnnotationSavingDebounce = true;
+    second._annotationManager.updateAnnotations(
+      contentData(state.rightBrowser, [
+        { id: note.id, comment: "Edited on right" },
+      ]),
+    );
+    assert.equal(
+      first._state.annotations.find((item: any) => item.id === note.id).comment,
+      "Edited on right",
+    );
+    await waitFor(
+      () =>
+        (
+          Zotero.Items.getByLibraryAndKey(
+            left.libraryID,
+            note.id,
+          ) as Zotero.Item
+        )?.annotationComment === "Edited on right",
+    );
+    await waitFor(() => !second._annotationManager._savingInProgress);
+    second._annotationManager.deleteAnnotations(
+      contentData(state.rightBrowser, [note.id]),
+    );
+    assert.isFalse(
+      first._state.annotations.some((item: any) => item.id === note.id),
+    );
+    await waitFor(
+      () => !Zotero.Items.getByLibraryAndKey(left.libraryID, note.id),
+    );
+  });
+
+  it("does not mirror annotations between different PDFs or delete another attachment's annotation", async function () {
+    const state = await open(false);
+    const note = addNote(state, "left");
+    const second = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    assert.isFalse(
+      second._state.annotations.some((item: any) => item.id === note.id),
+    );
+    await waitFor(
+      () => !!Zotero.Items.getByLibraryAndKey(left.libraryID, note.id),
+    );
+    await annotationStore.remove(right.id, [note.id]);
+    assert.ok(Zotero.Items.getByLibraryAndKey(left.libraryID, note.id));
+  });
+
+  it("rebinds annotation and selection sync after replacing readers for a swap", async function () {
+    const state = await open(true);
+    await factory.swapPDFs(state.tabID);
+    const note = addNote(state, "right");
+    const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
+    const second = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    assert.ok(
+      first._state.annotations.find((item: any) => item.id === note.id),
+      errors.join("; "),
+    );
+    second.setSelectedAnnotations(contentData(state.rightBrowser, [note.id]));
+    assert.deepEqual(Array.from(first._state.selectedAnnotationIDs), [note.id]);
+    await waitFor(
+      () => !!Zotero.Items.getByLibraryAndKey(left.libraryID, note.id),
+    );
+    const installed = first._updateState;
+    const content = (state.leftBrowser.contentWindow as any).wrappedJSObject;
+    const later = new content.Function(
+      "origin",
+      "return function(...args) { return origin.apply(this, args); }",
+    )(installed);
+    first._updateState = later;
+    state.disposeAnnotations();
+    state.disposeAnnotations = undefined;
+    assert.strictEqual(first._updateState, later);
+    first.setSelectedAnnotations(contentData(state.leftBrowser, []));
+    assert.deepEqual(Array.from(second._state.selectedAnnotationIDs), [
+      note.id,
+    ]);
+  });
+
+  it("releases the save callback and reports a persistence failure in the reader", async function () {
+    const state = await open(false);
+    const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
+    const original = Zotero.Annotations.saveFromJSON;
+    try {
+      Zotero.Annotations.saveFromJSON = async () => {
+        throw new Error("simulated annotation write failure");
+      };
+      addNote(state, "left");
+      await waitFor(() => first._state.readOnly);
+      await waitFor(() => !first._annotationManager._savingInProgress);
+      assert.include(
+        first._state.errorMessage,
+        "simulated annotation write failure",
+      );
+    } finally {
+      Zotero.Annotations.saveFromJSON = original;
+    }
   });
 });
