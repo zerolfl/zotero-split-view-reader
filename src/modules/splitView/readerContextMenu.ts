@@ -1,4 +1,5 @@
 import type { SplitSide, SplitTabState } from "./types";
+import { registerReaderEventListener } from "../../platform/readerEvents";
 
 interface PrimaryMenuConfig {
   menuState: "current" | "other" | "none";
@@ -46,6 +47,7 @@ type ContextMenuItem = {
 
 export class SplitReaderContextMenu {
   private registered = false;
+  private disposeListener: (() => void) | null = null;
   private readonly handler: _ZoteroTypes.Reader.EventHandler<"createViewContextMenu"> =
     (event) => this.onCreateViewContextMenu(event);
 
@@ -53,7 +55,7 @@ export class SplitReaderContextMenu {
 
   register(pluginID: string): void {
     if (this.registered) return;
-    Zotero.Reader.registerEventListener(
+    this.disposeListener = registerReaderEventListener(
       "createViewContextMenu",
       this.handler,
       pluginID,
@@ -64,11 +66,9 @@ export class SplitReaderContextMenu {
   unregister(): void {
     if (!this.registered) return;
     try {
-      Zotero.Reader.unregisterEventListener(
-        "createViewContextMenu",
-        this.handler,
-      );
+      this.disposeListener?.();
     } finally {
+      this.disposeListener = null;
       this.registered = false;
     }
   }

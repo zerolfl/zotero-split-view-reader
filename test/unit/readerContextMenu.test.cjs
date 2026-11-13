@@ -26,18 +26,23 @@ function setup() {
     "src/modules/splitView/readerContextMenu.ts",
     {
       Zotero: {
-        Reader: {
-          registerEventListener: (_type, handler, pluginID) => {
-            registeredHandler = handler;
-            registeredCount++;
-            actions.push(["register", pluginID]);
-          },
-          unregisterEventListener: (_type, handler) => {
+        getMainWindow: () => mainWindow,
+      },
+    },
+    {
+      "../../platform/readerEvents": {
+        registerReaderEventListener: (_type, handler, pluginID) => {
+          registeredHandler = handler;
+          registeredCount++;
+          actions.push(["register", pluginID]);
+          let active = true;
+          return () => {
+            if (!active) return;
+            active = false;
             assert.strictEqual(handler, registeredHandler);
             unregisteredCount++;
-          },
+          };
         },
-        getMainWindow: () => mainWindow,
       },
     },
   );
