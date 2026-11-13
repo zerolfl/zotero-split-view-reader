@@ -10,6 +10,7 @@ import { tabsForWindow } from "../platform/tabs";
 import { attachmentState } from "../platform/attachmentState";
 import { readerView } from "../platform/readerView";
 import { readerRuntime } from "../platform/readerRuntime";
+import { contextPane as splitContextPane } from "../platform/contextPane";
 import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
 import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
@@ -1712,7 +1713,7 @@ export class SplitViewFactory {
         state.activeSide === "left"
           ? state.leftParentItemID
           : state.rightParentItemID;
-      this.updateContextPane(tabID, win, activeParentItemID);
+      splitContextPane.updateItem(tabID, win, activeParentItemID);
 
       // 12. Setup annotation sync if same PDF
       if (state.isSamePDF) {
@@ -1944,7 +1945,7 @@ export class SplitViewFactory {
       if (!s || s.isCleaningUp) return;
       const open = event.detail?.open ?? false;
       if (s.rightBrowser) {
-        self.setContextPaneOpenForBrowser(s.rightBrowser, open);
+        splitContextPane.setReaderOpen(s.rightBrowser, open);
       }
     };
 
@@ -2008,6 +2009,7 @@ export class SplitViewFactory {
       eventListeners: [],
       timeoutIds: [],
       toolbarCloseObservers: [],
+      contextPaneObserver: null,
       leftViewerContainer: null,
       rightViewerContainer: null,
       splitRatio: 0.5,
@@ -2102,7 +2104,7 @@ export class SplitViewFactory {
       const curState = this.stateMap.get(tabID);
       if (curState) {
         curState.activeSide = "left";
-        this.updateContextPane(tabID, win, curState.leftParentItemID);
+        splitContextPane.updateItem(tabID, win, curState.leftParentItemID);
       }
 
       // Set up focus listeners
@@ -2286,7 +2288,7 @@ export class SplitViewFactory {
       if (!s || s.isCleaningUp) return;
       const open = event.detail?.open ?? false;
       if (s.rightBrowser) {
-        self.setContextPaneOpenForBrowser(s.rightBrowser, open);
+        splitContextPane.setReaderOpen(s.rightBrowser, open);
       }
     };
 
@@ -2349,6 +2351,7 @@ export class SplitViewFactory {
       eventListeners: [],
       timeoutIds: [],
       toolbarCloseObservers: [],
+      contextPaneObserver: null,
       leftViewerContainer: null,
       rightViewerContainer: null,
       splitRatio: 0.5,
@@ -2443,7 +2446,7 @@ export class SplitViewFactory {
       const curState = this.stateMap.get(tabID);
       if (curState) {
         curState.activeSide = "left";
-        this.updateContextPane(tabID, win, curState.leftParentItemID);
+        splitContextPane.updateItem(tabID, win, curState.leftParentItemID);
       }
 
       // Set up focus listeners
@@ -2558,7 +2561,7 @@ export class SplitViewFactory {
             const isOpen = !(
               (mainWindow as any).ZoteroContextPane?.collapsed ?? true
             );
-            this.setContextPaneOpenForBrowser(state.rightBrowser, isOpen);
+            splitContextPane.setReaderOpen(state.rightBrowser, isOpen);
           }, 50);
         },
         afterReady: () => {
@@ -2567,8 +2570,8 @@ export class SplitViewFactory {
             browser,
             isRight ? "right" : "left",
           );
-          if (!isRight) this.hideReaderSidenav(browser);
-          else this.injectContextPaneHandler(browser);
+          if (!isRight) splitContextPane.hideReaderSidenav(browser);
+          else splitContextPane.injectReaderHandler(browser);
         },
       },
     });
@@ -2679,58 +2682,6 @@ export class SplitViewFactory {
       state.toolbarCloseObservers.push({ side, observer });
     } catch (e) {
       Zotero.debug(`Split view: installToolbarCloseButton failed: ${e}`);
-    }
-  }
-
-  /**
-   * Hide the sidenav inside a reader browser
-   * This prevents each reader from having its own context pane toggle
-   */
-  private static hideReaderSidenav(browser: XULBrowserElement) {
-    try {
-      const win = browser.contentWindow;
-      if (!win) return;
-
-      const wrappedWin = (win as any).wrappedJSObject || win;
-      const doc = wrappedWin.document;
-      if (!doc) return;
-
-      const sidenav = doc.querySelector(
-        ".sidenav, reader-sidenav, #sidenav, [class*='sidenav']",
-      );
-      if (sidenav) {
-        sidenav.style.display = "none";
-      }
-
-      // Also try to find any context pane toggle buttons
-      const toggleBtns = doc.querySelectorAll(
-        "[class*='context-pane'], [data-action='toggle-pane']",
-      );
-      toggleBtns.forEach((btn: any) => {
-        btn.style.display = "none";
-      });
-
-      // Check the internal reader object for sidenav
-      const internalReader =
-        readerRuntime.getInternalReaderFromBrowser(browser);
-      if (internalReader) {
-        // Try to hide sidenav via the reader API if available
-        if (internalReader._sidenav) {
-          internalReader._sidenav.style.display = "none";
-        }
-        // Some readers have a toolbarRight that contains the sidenav
-        if (internalReader._toolbarRight) {
-          // Only hide context pane related items, not all toolbar items
-          const contextItems = internalReader._toolbarRight.querySelectorAll?.(
-            "[class*='context'], [data-action='toggle-pane']",
-          );
-          contextItems?.forEach((item: any) => {
-            item.style.display = "none";
-          });
-        }
-      }
-    } catch {
-      // Ignore errors
     }
   }
 
@@ -3458,7 +3409,7 @@ export class SplitViewFactory {
     const toolbarCloseObservers = [...state.toolbarCloseObservers];
     const sidebarToggleTimers = [...state.sidebarToggleTimers];
     const resizeTimerId = state.resizeTimerId;
-    const contextPaneObserver = (state as any).contextPaneObserver;
+    const contextPaneObserver = state.contextPaneObserver;
     const dragOverlay = state.dragOverlay;
 
     // Clear state arrays first to prevent re-entry
@@ -3470,7 +3421,7 @@ export class SplitViewFactory {
     state.rightViewerContainer = null;
     state.resizeTimerId = null;
     state.dragOverlay = null;
-    (state as any).contextPaneObserver = null;
+    state.contextPaneObserver = null;
 
     // Stop sync polling before other cleanup
     this.sync.stopSyncPolling(tabID);
@@ -3569,15 +3520,7 @@ export class SplitViewFactory {
     }
 
     // Disconnect context pane observer
-    if (contextPaneObserver) {
-      try {
-        contextPaneObserver.disconnect();
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - observer.disconnect failed: ${e}`,
-        );
-      }
-    }
+    splitContextPane.disconnectObserver(contextPaneObserver);
 
     // If no more split views, unregister global tab notifier
     if (this.stateMap.size === 0 && this.globalTabNotifierID) {
@@ -3675,34 +3618,6 @@ export class SplitViewFactory {
       })
       .show();
     popup.startCloseTimer(2000);
-  }
-
-  /**
-   * Inject a content-side event listener into the reader's iframe.
-   * This allows us to call setContextPaneOpen() (which uses flushSync) from
-   * within the content compartment, avoiding the cross-compartment issue.
-   */
-  private static injectContextPaneHandler(browser: XULBrowserElement) {
-    try {
-      const win = browser.contentWindow;
-      if (!win) return;
-      const wrappedWin = (win as any).wrappedJSObject || win;
-      const doc = wrappedWin.document;
-      if (!doc) return;
-
-      const script = doc.createElement("script");
-      script.textContent = `
-        document.addEventListener('__splitview_context_pane', function(e) {
-          if (window._reader && window._reader.setContextPaneOpen) {
-            window._reader.setContextPaneOpen(e.detail.open);
-          }
-        });
-      `;
-      doc.head.appendChild(script);
-      script.remove(); // Remove the script element; the listener persists
-    } catch (e) {
-      Zotero.debug(`Split view: injectContextPaneHandler error: ${e}`);
-    }
   }
 
   /**
@@ -3813,95 +3728,22 @@ export class SplitViewFactory {
   }
 
   /**
-   * Set contextPaneOpen state on a browser's internal reader.
-   * This controls whether the toggle button shows in the toolbar.
-   *
-   * Dispatches a custom event to trigger the injected content-side listener,
-   * which calls setContextPaneOpen() with React's flushSync() for a smooth,
-   * synchronous transition (no flicker). Falls back to direct _updateState()
-   * if the event handler is not available.
-   */
-  private static setContextPaneOpenForBrowser(
-    browser: XULBrowserElement,
-    open: boolean,
-  ) {
-    if (!readerRuntime.isBrowserAlive(browser)) return;
-    try {
-      const win = browser.contentWindow;
-      if (!win) return;
-      const wrappedWin = (win as any).wrappedJSObject || win;
-      const doc = wrappedWin.document;
-      if (!doc) return;
-
-      // Dispatch event to the injected content-side handler which calls
-      // setContextPaneOpen() with flushSync inside the correct compartment.
-      // The ENTIRE eventInit object must be cloned into the content compartment,
-      // otherwise the content-side CustomEvent constructor can't read the detail property.
-      const eventInit = Components.utils.cloneInto({ detail: { open } }, win);
-      doc.dispatchEvent(
-        new wrappedWin.CustomEvent("__splitview_context_pane", eventInit),
-      );
-    } catch (e) {
-      Zotero.debug(`Split view: setContextPaneOpenForBrowser error: ${e}`);
-      // Fallback: direct _updateState (async, may cause brief flicker)
-      try {
-        const internalReader =
-          readerRuntime.getInternalReaderFromBrowser(browser);
-        const fallbackWin = browser.contentWindow;
-        if (internalReader?._updateState && fallbackWin) {
-          const stateUpdate = Components.utils.cloneInto(
-            { contextPaneOpen: open },
-            fallbackWin,
-          );
-          internalReader._updateState(stateUpdate);
-        }
-      } catch {
-        // Ignore fallback errors
-      }
-    }
-  }
-
-  /**
    * Set up observer to watch context pane collapsed state changes
    * When context pane is toggled via sidenav, update right reader's toggle button visibility
    */
   private static setupContextPaneObserver(tabID: string, win: Window) {
     const state = this.stateMap.get(tabID);
     if (!state) return;
-
-    try {
-      const contextPane = win.document.getElementById("zotero-context-pane");
-      if (!contextPane) return;
-
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const self = this;
-      const observer = new win.MutationObserver(
-        (mutations: MutationRecord[]) => {
-          for (const mutation of mutations) {
-            if (
-              mutation.type === "attributes" &&
-              mutation.attributeName === "collapsed"
-            ) {
-              const isOpen = contextPane.getAttribute("collapsed") !== "true";
-              const s = self.stateMap.get(tabID);
-              if (s?.rightBrowser) {
-                self.setContextPaneOpenForBrowser(s.rightBrowser, isOpen);
-              }
-            }
-          }
-        },
-      );
-
-      observer.observe(contextPane, {
-        attributes: true,
-        attributeFilter: ["collapsed"],
-      });
-
-      // Store observer for cleanup
-      (state as any).contextPaneObserver = observer;
-    } catch {
-      // Ignore errors
-    }
+    splitContextPane.disconnectObserver(state.contextPaneObserver);
+    state.contextPaneObserver = splitContextPane.observeCollapsed(
+      win,
+      (isOpen) => {
+        const currentState = this.stateMap.get(tabID);
+        if (currentState?.rightBrowser) {
+          splitContextPane.setReaderOpen(currentState.rightBrowser, isOpen);
+        }
+      },
+    );
   }
 
   /**
@@ -4164,7 +4006,7 @@ export class SplitViewFactory {
 
     const parentItemID =
       side === "left" ? state.leftParentItemID : state.rightParentItemID;
-    this.updateContextPane(tabID, win, parentItemID);
+    splitContextPane.updateItem(tabID, win, parentItemID);
   }
 
   /**
@@ -4226,66 +4068,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Update context pane to show the specified item
-   * Based on Zotero's contextPane.js implementation
-   */
-  private static updateContextPane(
-    tabID: string,
-    win: Window,
-    parentItemID: number,
-  ) {
-    try {
-      const state = this.stateMap.get(tabID);
-      if (!state || state.isCleaningUp) return;
-
-      const document = win.document;
-      const item = Zotero.Items.get(parentItemID);
-      if (!item) return;
-
-      const contextPaneElement = document.querySelector("context-pane") as any;
-      if (!contextPaneElement) return;
-
-      const itemPaneDeck = contextPaneElement._itemPaneDeck;
-      if (!itemPaneDeck) return;
-
-      let itemDetails = itemPaneDeck.querySelector(
-        `[data-tab-id="${tabID}"]`,
-      ) as any;
-
-      if (itemDetails) {
-        itemDetails.item = item;
-        if (typeof itemDetails.render === "function") {
-          itemDetails.render();
-        }
-      } else {
-        itemDetails = document.createXULElement("item-details");
-        itemDetails.id = tabID + "-context";
-        itemDetails.dataset.tabId = tabID;
-        itemDetails.className = "zotero-item-pane-content";
-        itemPaneDeck.appendChild(itemDetails);
-
-        // Set up the item-details properties
-        const libraryID = item.libraryID;
-        const library = Zotero.Libraries.get(libraryID);
-        const editable = library && library.editable && !item.deleted;
-
-        itemDetails.editable = editable;
-        itemDetails.tabID = tabID;
-        itemDetails.tabType = "reader"; // Use reader type for proper rendering
-        itemDetails.item = item;
-
-        if (contextPaneElement._sidenav) {
-          itemDetails.sidenav = contextPaneElement._sidenav;
-        }
-      }
-
-      itemPaneDeck.selectedPanel = itemDetails;
-    } catch {
-      // Ignore context pane errors
-    }
-  }
-
-  /**
    * Ensure the global tab notifier is registered.
    * This is a single notifier shared across all split view tabs.
    * It handles CSS class toggling and tab close cleanup for all split views.
@@ -4313,10 +4095,10 @@ export class SplitViewFactory {
           if (selectedState && !selectedState.isCleaningUp) {
             // This tab has split view - activate CSS and context pane
             win.document.documentElement?.classList.add("split-view-active");
-            self.showContextPaneForSplitView(win);
+            splitContextPane.showForSplitView(win);
             // Update context pane content to show the active side's item
             const parentItemID = self.getActiveParentItemID(selectedState);
-            self.updateContextPane(selectedTabID, win, parentItemID);
+            splitContextPane.updateItem(selectedTabID, win, parentItemID);
           } else {
             // This tab has no split view - remove CSS class
             win.document.documentElement?.classList.remove("split-view-active");
@@ -4379,107 +4161,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Show context pane elements for our split view tab
-   */
-  private static showContextPaneForSplitView(win: Window) {
-    const document = win.document;
-    const ZoteroContextPane = (win as any).ZoteroContextPane;
-    if (!ZoteroContextPane) return;
-
-    const splitter = ZoteroContextPane.splitter;
-    if (splitter) {
-      splitter.setAttribute("hidden", "false");
-    }
-
-    const sidenav = ZoteroContextPane.sidenav;
-    if (sidenav) {
-      sidenav.hidden = false;
-      sidenav.removeAttribute("hidden");
-      sidenav.style.display = "";
-      sidenav.style.visibility = "visible";
-    }
-
-    const sidenavById = document.getElementById(
-      "zotero-context-pane-sidenav",
-    ) as HTMLElement | null;
-    if (sidenavById) {
-      (sidenavById as any).hidden = false;
-      sidenavById.removeAttribute("hidden");
-    }
-
-    const contextPaneBox = document.getElementById("zotero-context-pane");
-    if (contextPaneBox) {
-      contextPaneBox.removeAttribute("hidden");
-    }
-
-    this.injectSidenavCSS(document);
-  }
-
-  /**
-   * Inject CSS to keep sidenav visible when context pane is collapsed
-   * Only applies when split-view tab is active (body has .split-view-active class)
-   */
-  private static injectSidenavCSS(document: Document) {
-    const styleId = "split-view-sidenav-style";
-    if (document.getElementById(styleId)) {
-      // CSS already injected, just ensure the active class is set
-      document.documentElement?.classList.add("split-view-active");
-      return;
-    }
-
-    const style = document.createElement("style");
-    style.id = styleId;
-    // Override XUL's collapsed behavior for context pane
-    // Zotero uses display:flex for context pane, we need to maintain that
-    // when collapsed to keep sidenav visible
-    style.textContent = `
-      /* Context pane layout - ONLY override when expanded (not collapsed).
-       * When collapsed, we apply NO display override so XUL's native
-       * collapsed="true" behavior works correctly (hides everything
-       * including the sidenav). This matches native Zotero behavior:
-       * collapsed → entire context pane + sidenav hidden, reader toggle shown. */
-      :root.split-view-active #zotero-context-pane:not([collapsed="true"]) {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-grow: 0 !important;
-        flex-shrink: 0 !important;
-      }
-      /* Force sidenav visible when context pane is expanded
-       * (overrides the hidden="true" attribute that Zotero sets by default) */
-      :root.split-view-active #zotero-context-pane:not([collapsed="true"]) #zotero-context-pane-sidenav {
-        display: flex !important;
-        flex-direction: column !important;
-        visibility: visible !important;
-        pointer-events: auto !important;
-        width: 37px !important;
-        min-width: 37px !important;
-        flex-shrink: 0 !important;
-      }
-      :root.split-view-active #zotero-context-pane:not([collapsed="true"]) #zotero-context-pane-sidenav[hidden] {
-        display: flex !important;
-        visibility: visible !important;
-      }
-      /* Splitter - only show when context pane is expanded */
-      :root.split-view-active #zotero-context-splitter[state="open"] {
-        display: flex !important;
-        visibility: visible !important;
-      }
-      /* Dragging cursor for resizer */
-      body.split-view-dragging,
-      body.split-view-dragging * {
-        cursor: ew-resize !important;
-        user-select: none !important;
-      }
-    `;
-    const target = document.head || document.documentElement;
-    if (target) {
-      target.appendChild(style);
-    }
-
-    document.documentElement?.classList.add("split-view-active");
-  }
-
-  /**
    * Set up context pane for our split view tab
    * Note: Polling removed - tab notifier handles tab selection events
    */
@@ -4488,14 +4169,14 @@ export class SplitViewFactory {
     if (!state) return;
 
     // Initialize immediately
-    this.showContextPaneForSplitView(win);
+    splitContextPane.showForSplitView(win);
 
     // Single delayed call to ensure async updates complete
     // (Replaced multiple 50ms/150ms/300ms calls with a single 300ms call)
-    this.trackTimeout(state, () => this.showContextPaneForSplitView(win), 300);
+    this.trackTimeout(state, () => splitContextPane.showForSplitView(win), 300);
 
     // Note: Polling interval removed - ensureGlobalTabNotifier() already handles
-    // tab selection events and calls showContextPaneForSplitView() when needed
+    // tab selection events and calls showForSplitView() when needed
   }
 
   // NOTE: The old singleton cleanup() method has been replaced by:

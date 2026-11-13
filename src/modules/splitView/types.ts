@@ -40,6 +40,7 @@ export interface SplitTabState {
   eventListeners: TrackedEventListener[];
   timeoutIds: number[];
   toolbarCloseObservers: ToolbarCloseObserver[];
+  contextPaneObserver: MutationObserver | null;
   leftViewerContainer: Element | null;
   rightViewerContainer: Element | null;
   splitRatio: number;
