@@ -1,4 +1,5 @@
 import { bindSplitAnnotations } from "./splitView/annotations";
+import { SplitLayout } from "./splitView/layout";
 import { annotationStore } from "../platform/annotationStore";
 import { reportAnnotationFailure } from "../platform/readerAnnotations";
 import { SplitSession } from "./splitView/session";
@@ -35,6 +36,10 @@ export class SplitViewFactory {
   private static session = new SplitSession(
     (id, data) => this.restoreSplitViewFromSession(id, data),
     (id) => this.hasActiveSplitState(id),
+  );
+  private static layout = new SplitLayout(
+    (id) => this.stateMap.get(id),
+    (state) => this.session.write(state),
   );
   private static pdfSelector = new PDFSelector();
   private static readAloud = new SplitReadAloudService({
@@ -519,264 +524,6 @@ export class SplitViewFactory {
     const id = win.setTimeout(callback, delay);
     state.timeoutIds.push(id);
     return id;
-  }
-
-  /**
-   * Create a browser element for the reader
-   * Uses CSS flex layout for automatic proportional resizing
-   */
-  private static createReaderBrowser(win: Window): XULBrowserElement {
-    const browser = win.document.createXULElement("browser");
-    // Don't set XUL flex attribute - use CSS flex instead
-    browser.setAttribute("type", "content");
-    browser.setAttribute("transparent", "true");
-    browser.setAttribute("src", "resource://zotero/reader/reader.html");
-    // Initial flex: equal distribution, will be updated by updateBrowserFlex
-    // Use flex-basis: 0 (not 0%) to ensure proportional sizing regardless of content
-    (browser as any).style.flex = "1 1 0";
-    (browser as any).style.minWidth = "200px";
-    (browser as any).style.maxWidth = "none";
-    (browser as any).style.overflow = "hidden";
-    (browser as any).style.boxSizing = "border-box";
-    return browser;
-  }
-
-  /**
-   * Update browser flex values to achieve the desired split ratio
-   * Uses flex layout for automatic proportional resizing when window changes
-   */
-  private static updateBrowserFlex(
-    leftBrowser: XULBrowserElement,
-    rightBrowser: XULBrowserElement,
-    splitRatio: number,
-  ) {
-    // Use flex-grow to control proportions (flex-shrink=1, flex-basis=0)
-    // flex-basis: 0 (not 0%) ensures both browsers start at exactly 0 and grow proportionally
-    // Using integer flex-grow values to avoid floating point issues
-    const leftFlex = Math.round(splitRatio * 1000);
-    const rightFlex = Math.round((1 - splitRatio) * 1000);
-    (leftBrowser as any).style.flex = `${leftFlex} 1 0`;
-    (rightBrowser as any).style.flex = `${rightFlex} 1 0`;
-  }
-
-  /**
-   * Set up drag functionality for the resizer
-   * - Uses requestAnimationFrame for smooth performance
-   * - Uses flex layout for automatic proportional resizing
-   * - PDF scale is preserved (PDF.js handles relative vs absolute scaling)
-   */
-  private static setupResizerDrag(
-    tabID: string,
-    resizer: XULElement | HTMLElement,
-    leftBrowser: XULBrowserElement,
-    rightBrowser: XULBrowserElement,
-    mainHbox: XULElement,
-    win: Window,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    let isDragging = false;
-    let startX = 0;
-    let startRatio = 0;
-    let overlay: HTMLElement | null = null;
-    let rafPending = false;
-    let onKeyDown: ((e: KeyboardEvent) => void) | null = null;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const removeOverlay = () => {
-      isDragging = false;
-      if (overlay) {
-        overlay.remove();
-        overlay = null;
-      }
-      const s = self.stateMap.get(tabID);
-      if (s) s.dragOverlay = null;
-      win.removeEventListener("mouseup", onMouseUp);
-      win.removeEventListener("blur", onMouseUp);
-      win.document.removeEventListener("mouseleave", onMouseUp);
-      if (onKeyDown) {
-        win.removeEventListener("keydown", onKeyDown);
-        onKeyDown = null;
-      }
-    };
-
-    const createOverlay = () => {
-      // Remove any existing overlay first (but don't reset isDragging)
-      if (overlay) {
-        overlay.remove();
-        overlay = null;
-      }
-      state.dragOverlay = null;
-      win.removeEventListener("mouseup", onMouseUp);
-      win.removeEventListener("blur", onMouseUp);
-      win.document.removeEventListener("mouseleave", onMouseUp);
-      if (onKeyDown) {
-        win.removeEventListener("keydown", onKeyDown);
-      }
-
-      overlay = win.document.createElement("div");
-      overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 99999;
-        cursor: ew-resize;
-        background: transparent;
-      `;
-      const target = win.document.documentElement || win.document.body;
-      if (target) target.appendChild(overlay);
-      state.dragOverlay = overlay;
-      overlay.addEventListener("mousemove", onMouseMove);
-      overlay.addEventListener("mouseup", onMouseUp);
-      state.eventListeners.push(
-        {
-          target: overlay,
-          type: "mousemove",
-          listener: onMouseMove as EventListener,
-        },
-        {
-          target: overlay,
-          type: "mouseup",
-          listener: onMouseUp as EventListener,
-        },
-      );
-
-      // Also listen on window in case mouseup happens outside overlay
-      win.addEventListener("mouseup", onMouseUp);
-      win.addEventListener("blur", onMouseUp);
-      win.document.addEventListener("mouseleave", onMouseUp);
-      state.eventListeners.push(
-        { target: win, type: "mouseup", listener: onMouseUp as EventListener },
-        { target: win, type: "blur", listener: onMouseUp as EventListener },
-        {
-          target: win.document,
-          type: "mouseleave",
-          listener: onMouseUp as EventListener,
-        },
-      );
-
-      // Escape key to cancel drag and restore original ratio
-      onKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          // Restore original ratio
-          const s = self.stateMap.get(tabID);
-          if (s) {
-            s.splitRatio = startRatio;
-            self.updateBrowserFlex(leftBrowser, rightBrowser, startRatio);
-          }
-          removeOverlay();
-        }
-      };
-      win.addEventListener("keydown", onKeyDown);
-      state.eventListeners.push({
-        target: win,
-        type: "keydown",
-        listener: onKeyDown as EventListener,
-        options: true,
-      });
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      isDragging = true;
-      startX = e.clientX;
-      // Store the starting ratio for Escape key restoration
-      const s = self.stateMap.get(tabID);
-      startRatio = s?.splitRatio ?? 0.5;
-
-      createOverlay();
-      e.preventDefault();
-      e.stopPropagation();
-    };
-
-    const onWindowMouseDown = (e: MouseEvent) => {
-      if (isDragging) return;
-      const s = self.stateMap.get(tabID);
-      if (!s) return;
-
-      // Only handle when our tab is visible (resizer has non-zero dimensions)
-      const resizerRect = resizer.getBoundingClientRect();
-      if (resizerRect.width === 0 || resizerRect.height === 0) return;
-
-      const leftBrowserRect = leftBrowser.getBoundingClientRect();
-
-      const edgeX = leftBrowserRect.right;
-      const isNearEdge =
-        Math.abs(e.clientX - edgeX) <= 15 &&
-        e.clientY >= resizerRect.top &&
-        e.clientY <= resizerRect.bottom;
-
-      if (isNearEdge) {
-        onMouseDown(e);
-      }
-    };
-
-    const onMouseMove = (e: MouseEvent) => {
-      const s = self.stateMap.get(tabID);
-      if (!isDragging || !s) return;
-      if (rafPending) return;
-
-      rafPending = true;
-      win.requestAnimationFrame(() => {
-        rafPending = false;
-        const s2 = self.stateMap.get(tabID);
-        if (!isDragging || !s2) return;
-
-        // Use real-time container width instead of cached start widths
-        // This ensures correct ratio calculation even if window is resized during drag
-        const containerWidth = mainHbox.getBoundingClientRect().width;
-        const resizerWidth = 1;
-        const availableWidth = containerWidth - resizerWidth;
-
-        // Calculate new left width based on mouse position
-        // Use Math.floor with integer percentage like Zotero's split-view-resizer.js:
-        // let p = Math.floor((br.width - (x - br.left)) / br.width * 100);
-        const containerRect = mainHbox.getBoundingClientRect();
-        const relativeX = e.clientX - containerRect.left;
-
-        // Calculate percentage and floor to integer (1% step, matching Zotero)
-        let percent = Math.floor((relativeX / availableWidth) * 100);
-
-        // Apply min/max constraints (20-80% like Zotero's VIEW_MIN_SIZE)
-        const minPercent = Math.ceil((200 / availableWidth) * 100); // At least 200px
-        const maxPercent = 100 - minPercent;
-        percent = Math.max(minPercent, Math.min(maxPercent, percent));
-
-        // Update split ratio and flex values
-        s2.splitRatio = percent / 100;
-        self.updateBrowserFlex(leftBrowser, rightBrowser, s2.splitRatio);
-      });
-    };
-
-    const onMouseUp = () => {
-      // Save the new split ratio to tab data for session restore
-      const s = self.stateMap.get(tabID);
-      if (s && !s.isCleaningUp) {
-        self.updateTabDataForSession(tabID);
-      }
-      removeOverlay();
-    };
-
-    // Track resizer mousedown listener for proper cleanup
-    resizer.addEventListener("mousedown", onMouseDown);
-    state.eventListeners.push({
-      target: resizer,
-      type: "mousedown",
-      listener: onMouseDown as EventListener,
-      options: undefined,
-    });
-
-    this.trackEventListener(
-      state,
-      win,
-      "mousedown",
-      onWindowMouseDown as EventListener,
-      true,
-    );
   }
 
   /**
@@ -1291,7 +1038,7 @@ export class SplitViewFactory {
       // Restore split ratio
       if (typeof splitRatio === "number" && splitRatio > 0 && splitRatio < 1) {
         state.splitRatio = splitRatio;
-        this.updateBrowserFlex(
+        this.layout.updateBrowserFlex(
           state.leftBrowser,
           state.rightBrowser,
           splitRatio,
@@ -2128,8 +1875,8 @@ export class SplitViewFactory {
     (mainHbox as any).style.overflow = "hidden";
     (mainHbox as any).style.boxSizing = "border-box";
 
-    const leftBrowser = this.createReaderBrowser(win);
-    const rightBrowser = this.createReaderBrowser(win);
+    const leftBrowser = this.layout.createReaderBrowser(win);
+    const rightBrowser = this.layout.createReaderBrowser(win);
 
     const resizer = win.document.createXULElement("box") as XULElement;
     resizer.className = "split-view-resizer";
@@ -2292,7 +2039,7 @@ export class SplitViewFactory {
     );
 
     // Set up drag functionality
-    this.setupResizerDrag(
+    this.layout.setupResizerDrag(
       tabID,
       resizer,
       leftBrowser,
@@ -2302,7 +2049,11 @@ export class SplitViewFactory {
     );
 
     // Set initial flex values
-    this.updateBrowserFlex(leftBrowser, rightBrowser, newState.splitRatio);
+    this.layout.updateBrowserFlex(
+      leftBrowser,
+      rightBrowser,
+      newState.splitRatio,
+    );
 
     // Register global tab notifier (if not already registered)
     this.ensureGlobalTabNotifier(win);
@@ -2466,8 +2217,8 @@ export class SplitViewFactory {
     (mainHbox as any).style.overflow = "hidden";
     (mainHbox as any).style.boxSizing = "border-box";
 
-    const leftBrowser = this.createReaderBrowser(win);
-    const rightBrowser = this.createReaderBrowser(win);
+    const leftBrowser = this.layout.createReaderBrowser(win);
+    const rightBrowser = this.layout.createReaderBrowser(win);
 
     const resizer = win.document.createXULElement("box") as XULElement;
     resizer.className = "split-view-resizer";
@@ -2629,7 +2380,7 @@ export class SplitViewFactory {
     );
 
     // Set up drag functionality
-    this.setupResizerDrag(
+    this.layout.setupResizerDrag(
       tabID,
       resizer,
       leftBrowser,
@@ -2639,7 +2390,11 @@ export class SplitViewFactory {
     );
 
     // Set initial flex values
-    this.updateBrowserFlex(leftBrowser, rightBrowser, newState.splitRatio);
+    this.layout.updateBrowserFlex(
+      leftBrowser,
+      rightBrowser,
+      newState.splitRatio,
+    );
 
     // Register global tab notifier (if not already registered)
     this.ensureGlobalTabNotifier(win);
