@@ -37,6 +37,7 @@ import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { SplitSessionRestore } from "./splitView/sessionRestore";
 import { SplitReaderInitialization } from "./splitView/readerInitialization";
+import { SplitViewNotifications } from "./splitView/notifications";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -44,6 +45,24 @@ import { clearPref, getPref } from "../utils/prefs";
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
+  private static notifications = new SplitViewNotifications({
+    getString: (key, options) =>
+      options
+        ? getString(key as Parameters<typeof getString>[0], options as any)
+        : getString(key as Parameters<typeof getString>[0]),
+    show: (text, type, duration) => {
+      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+      })
+        .createLine({
+          text,
+          type,
+          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
+        })
+        .show();
+      popup.startCloseTimer(duration);
+    },
+  });
   private static tabNotifier = new SplitTabNotifier({
     getState: (tabID) => this.stateMap.get(tabID) || null,
     getActiveParentItemID: (state) => this.getActiveParentItemID(state),
@@ -102,7 +121,7 @@ export class SplitViewFactory {
     cleanup: (tabID) => this.cleanupTabResources(tabID),
     prepareSingleReaderClose: (tabID, itemID) =>
       this.prepareTabDataForSingleReaderClose(tabID, itemID),
-    showClosed: () => this.showSplitViewClosedMessage(),
+    showClosed: () => this.notifications.showClosed(),
     debug: (message) => Zotero.debug(message),
   });
   private static tabTitles = new SplitTabTitleService({
@@ -187,20 +206,8 @@ export class SplitViewFactory {
     getMainWindow: () => Zotero.getMainWindow(),
     trackEventListener: (...args) => this.trackEventListener(...args),
     trackTimeout: (...args) => this.trackTimeout(...args),
-    onPositionSynced: (side, result) => {
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: result?.pageIndexClamped
-            ? getString("splitview-last-page-reached", { args: { side } })
-            : getString("splitview-position-synced"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(2000);
-    },
+    onPositionSynced: (side, result) =>
+      this.notifications.showPositionSynced(side, result),
   });
   private static interactions = new SplitInteractions({
     getState: (tabID) => this.stateMap.get(tabID),
@@ -292,7 +299,7 @@ export class SplitViewFactory {
       this.setupContextPane(tabID, win);
     },
     initializeReader: (...args) => this.initializeReader(...args),
-    showLoaded: (isSamePDF) => this.showCreatedSplitViewMessage(isSamePDF),
+    showLoaded: (isSamePDF) => this.notifications.showCreated(isSamePDF),
     updateContextPane: (tabID, win, itemID) =>
       splitContextPane.updateItem(tabID, win, itemID),
     setupFocusListeners: (...args) =>
@@ -377,7 +384,7 @@ export class SplitViewFactory {
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
       this.scheduleSyncRestart(tabID, state),
-    showSwapped: () => this.showSplitViewSwappedMessage(),
+    showSwapped: () => this.notifications.showSwapped(),
     debug: (message) => Zotero.debug(message),
   });
   private static pdfReplacement = new PDFReplacementService({
@@ -401,8 +408,8 @@ export class SplitViewFactory {
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
       this.scheduleSyncRestart(tabID, state),
-    showLoaded: () => this.showSplitViewLoadMessage(true),
-    showFailure: () => this.showSplitViewLoadMessage(false),
+    showLoaded: () => this.notifications.showLoadResult(true),
+    showFailure: () => this.notifications.showLoadResult(false),
     debug: (message) => Zotero.debug(message),
   });
   private static sessionRestore = new SplitSessionRestore({
@@ -1078,61 +1085,7 @@ export class SplitViewFactory {
       // Ignore errors
     }
 
-    this.showSplitViewClosedMessage();
-  }
-
-  private static showSplitViewClosedMessage() {
-    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-      closeOnClick: true,
-    })
-      .createLine({
-        text: getString("splitview-closed"),
-        type: "default",
-        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-      })
-      .show();
-    popup.startCloseTimer(2000);
-  }
-
-  private static showSplitViewLoadMessage(loaded: boolean) {
-    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-      closeOnClick: true,
-    })
-      .createLine({
-        text: getString(loaded ? "splitview-loaded" : "splitview-not-found"),
-        type: loaded ? "default" : "error",
-        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-      })
-      .show();
-    popup.startCloseTimer(2000);
-  }
-
-  private static showCreatedSplitViewMessage(isSamePDF: boolean) {
-    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-      closeOnClick: true,
-    })
-      .createLine({
-        text: getString(
-          isSamePDF ? "splitview-same-pdf-loaded" : "splitview-loaded",
-        ),
-        type: "default",
-        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-      })
-      .show();
-    popup.startCloseTimer(3000);
-  }
-
-  private static showSplitViewSwappedMessage() {
-    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-      closeOnClick: true,
-    })
-      .createLine({
-        text: getString("splitview-swap-pdf"),
-        type: "default",
-        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-      })
-      .show();
-    popup.startCloseTimer(2000);
+    this.notifications.showClosed();
   }
 
   private static scheduleSyncRestart(tabID: string, state: SplitTabState) {
