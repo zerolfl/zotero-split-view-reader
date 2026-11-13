@@ -35,6 +35,7 @@ import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { SplitTabCleanup } from "./splitView/tabCleanup";
+import { SplitSessionRestore } from "./splitView/sessionRestore";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -356,6 +357,28 @@ export class SplitViewFactory {
       this.scheduleSyncRestart(tabID, state),
     showLoaded: () => this.showSplitViewLoadMessage(true),
     showFailure: () => this.showSplitViewLoadMessage(false),
+    debug: (message) => Zotero.debug(message),
+  });
+  private static sessionRestore = new SplitSessionRestore({
+    getReader: (tabID) => Zotero.Reader.getByTabID(tabID) || null,
+    getInitializationPromise: (reader) =>
+      readerRuntime.getInitializationPromise(reader),
+    hasState: (tabID) => this.stateMap.has(tabID),
+    itemExists: (itemID) => Zotero.Items.exists(itemID),
+    getItem: (itemID) => Zotero.Items.get(itemID) || null,
+    convertSamePDF: (reader, data) =>
+      this.convertToSamePDFSplitView(reader, data),
+    convertDifferentPDF: (reader, item, data) =>
+      this.convertToSplitView(reader, item, data),
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    updateBrowserFlex: (state, ratio) =>
+      this.layout.updateBrowserFlex(
+        state.leftBrowser,
+        state.rightBrowser,
+        ratio,
+      ),
+    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    writeSession: (tabID) => this.updateTabDataForSession(tabID),
     debug: (message) => Zotero.debug(message),
   });
   private static pdfSelector = new PDFSelector();
@@ -696,117 +719,7 @@ export class SplitViewFactory {
     tabID: string,
     savedData: any,
   ) {
-    const win = Zotero.getMainWindow();
-
-    // Get the reader that was just loaded
-    const reader = Zotero.Reader.getByTabID(tabID);
-    if (!reader) {
-      Zotero.debug(
-        `Split view: Cannot restore - reader not found for tab ${tabID}`,
-      );
-      return;
-    }
-
-    // Wait for reader to be fully initialized
-    if (reader._initPromise) {
-      await reader._initPromise;
-    }
-
-    // Check if already converted (e.g., user manually enabled split view)
-    if (this.stateMap.has(tabID)) {
-      Zotero.debug(
-        `Split view: Tab ${tabID} already has split view, skipping restore`,
-      );
-      return;
-    }
-
-    const {
-      leftItemID,
-      rightItemID,
-      isSamePDF,
-      splitRatio,
-      syncEnabled: legacySyncEnabled,
-      primarySide,
-      activeSide,
-    } = savedData;
-
-    // Validate items still exist
-    if (!Zotero.Items.exists(leftItemID) || !Zotero.Items.exists(rightItemID)) {
-      Zotero.debug(
-        `Split view: Cannot restore - one or both items no longer exist`,
-      );
-      return;
-    }
-
-    const leftItem = Zotero.Items.get(leftItemID);
-    const rightItem = Zotero.Items.get(rightItemID);
-
-    if (!leftItem || !rightItem) {
-      Zotero.debug(`Split view: Cannot restore - failed to get items`);
-      return;
-    }
-
-    Zotero.debug(
-      `Split view: Restoring split view for tab ${tabID} (isSamePDF: ${isSamePDF})`,
-    );
-
-    if (isSamePDF) {
-      // Restore same-PDF split view
-      await this.convertToSamePDFSplitView(reader, savedData);
-    } else {
-      // Restore different-PDF split view
-      await this.convertToSplitView(reader, rightItem, savedData);
-    }
-
-    // Restore saved settings
-    const state = this.stateMap.get(tabID);
-    if (state) {
-      // Restore split ratio
-      if (typeof splitRatio === "number" && splitRatio > 0 && splitRatio < 1) {
-        state.splitRatio = splitRatio;
-        this.layout.updateBrowserFlex(
-          state.leftBrowser,
-          state.rightBrowser,
-          splitRatio,
-        );
-      }
-
-      // Reader setup starts synchronization after its delayed initialization.
-      let restoredPrimarySide: "left" | "right" | null | undefined;
-      if (primarySide === "left" || primarySide === "right") {
-        restoredPrimarySide = primarySide;
-      } else if (
-        Object.prototype.hasOwnProperty.call(savedData, "primarySide") &&
-        primarySide === null
-      ) {
-        restoredPrimarySide = null;
-      }
-
-      // Legacy migration: old versions persisted a standalone syncEnabled flag.
-      // In the new model, sync is off when no primary view exists.
-      if (legacySyncEnabled === false) {
-        restoredPrimarySide = null;
-      }
-      if (restoredPrimarySide !== undefined) {
-        state.primarySide = restoredPrimarySide;
-      }
-      this.updateScrollbarColors(tabID);
-      // Sync polling will be started by convertToSplitView's delay timer if a
-      // primary side is available.
-
-      // Restore active side
-      if (activeSide === "left" || activeSide === "right") {
-        state.activeSide = activeSide;
-      }
-
-      // Persist the restored state back into the tab session data so an
-      // explicit `primarySide: null` survives the next Zotero restart.
-      this.updateTabDataForSession(tabID);
-    }
-
-    Zotero.debug(
-      `Split view: Successfully restored split view for tab ${tabID}`,
-    );
+    await this.sessionRestore.restore(tabID, savedData);
   }
   private static updateTabDataForSession(tabID: string) {
     const state = this.stateMap.get(tabID);

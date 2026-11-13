@@ -113,6 +113,14 @@ test("reader readiness releases its deadline after success or rejected initializ
     clearTimeout: (id) => pending.delete(id),
   });
   const ready = { _iframeWindow: {}, initializedPromise: Promise.resolve() };
+  const initializationPromise = Promise.resolve();
+  assert.strictEqual(
+    readerRuntime.getInitializationPromise({
+      _initPromise: initializationPromise,
+    }),
+    initializationPromise,
+  );
+  assert.equal(readerRuntime.getInitializationPromise({}), null);
   await readerRuntime.waitForReaderReady({
     _internalReader: { _primaryView: ready },
   });

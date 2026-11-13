@@ -197,6 +197,10 @@ async function waitForReaderReady(
   }
 }
 
+function getInitializationPromise(reader: any): Promise<void> | null {
+  return reader?._initPromise || null;
+}
+
 function getReaderForBrowser(browser: XULBrowserElement): any {
   try {
     const readers = (Zotero.Reader as any)._readers;
@@ -215,5 +219,6 @@ export const readerRuntime = {
   unloadBrowser,
   closeReaderWithoutClosingTab,
   waitForReaderReady,
+  getInitializationPromise,
   getReaderForBrowser,
 };
