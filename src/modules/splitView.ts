@@ -443,7 +443,7 @@ export class SplitViewFactory {
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
-      this.scheduleSyncRestart(tabID, state),
+      this.delayedSetup.restartSync(tabID, state),
     showSwapped: () => this.notifications.showSwapped(),
     debug: (message) => Zotero.debug(message),
   });
@@ -467,7 +467,7 @@ export class SplitViewFactory {
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
-      this.scheduleSyncRestart(tabID, state),
+      this.delayedSetup.restartSync(tabID, state),
     showLoaded: () => this.notifications.showLoadResult(true),
     showFailure: () => this.notifications.showLoadResult(false),
     debug: (message) => Zotero.debug(message),
@@ -810,20 +810,6 @@ export class SplitViewFactory {
     }
 
     this.notifications.showClosed();
-  }
-
-  private static scheduleSyncRestart(tabID: string, state: SplitTabState) {
-    this.resourceTracker.trackTimeout(
-      state,
-      () => {
-        const current = this.stateMap.get(tabID);
-        if (!current?.primarySide) return;
-        this.sync.cacheViewerContainers(tabID);
-        this.sync.initSyncState(tabID);
-        this.sync.startSyncPolling(tabID);
-      },
-      500,
-    );
   }
 
   /**

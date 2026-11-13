@@ -21,6 +21,20 @@ export interface SplitViewDelayedSetupDependencies {
 export class SplitViewDelayedSetup {
   constructor(private readonly deps: SplitViewDelayedSetupDependencies) {}
 
+  restartSync(tabID: string, state: SplitTabState): void {
+    this.deps.trackTimeout(
+      state,
+      () => {
+        const current = this.deps.getState(tabID);
+        if (!current?.primarySide) return;
+        this.deps.cacheViewerContainers(tabID);
+        this.deps.initSyncState(tabID);
+        this.deps.startSyncPolling(tabID);
+      },
+      500,
+    );
+  }
+
   schedule(
     tabID: string,
     state: SplitTabState,

@@ -126,3 +126,37 @@ test("skips delayed setup after its tab state has been removed", () => {
     ["timeout"],
   );
 });
+
+test("restarts sync after rechecking the current primary side", () => {
+  const fixture = setup("right");
+
+  fixture.delayed.restartSync("tab-3", fixture.state);
+  fixture.callback()();
+
+  assert.deepEqual(fixture.events, [
+    ["timeout", fixture.state, 500],
+    ["cache", "tab-3"],
+    ["sync-state", "tab-3"],
+    ["sync-poll", "tab-3"],
+  ]);
+});
+
+test("skips sync restart when the tab is closed or has no primary side", () => {
+  const closed = setup();
+  closed.delayed.restartSync("closed-tab", closed.state);
+  closed.setState(undefined);
+  closed.callback()();
+
+  const independent = setup(null);
+  independent.delayed.restartSync("independent-tab", independent.state);
+  independent.callback()();
+
+  assert.deepEqual(
+    closed.events.map(([name]) => name),
+    ["timeout"],
+  );
+  assert.deepEqual(
+    independent.events.map(([name]) => name),
+    ["timeout"],
+  );
+});
