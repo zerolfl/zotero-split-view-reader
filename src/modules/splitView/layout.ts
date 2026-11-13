@@ -6,19 +6,6 @@ export class SplitLayout {
     private readonly persist: (state: SplitTabState) => void,
   ) {}
 
-  createReaderBrowser(win: Window): XULBrowserElement {
-    const browser = win.document.createXULElement("browser");
-    browser.setAttribute("type", "content");
-    browser.setAttribute("transparent", "true");
-    browser.setAttribute("src", "resource://zotero/reader/reader.html");
-    (browser as any).style.flex = "1 1 0";
-    (browser as any).style.minWidth = "200px";
-    (browser as any).style.maxWidth = "none";
-    (browser as any).style.overflow = "hidden";
-    (browser as any).style.boxSizing = "border-box";
-    return browser;
-  }
-
   updateBrowserFlex(
     leftBrowser: XULBrowserElement,
     rightBrowser: XULBrowserElement,

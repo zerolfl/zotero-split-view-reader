@@ -27,6 +27,7 @@ import { SplitViewLifecycle } from "./splitView/lifecycle";
 import { PDFSwapService } from "./splitView/pdfSwap";
 import { PDFReplacementService } from "./splitView/pdfReplacement";
 import { SplitReaderBrowserAdapter } from "../platform/splitReaderBrowser";
+import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -129,6 +130,13 @@ export class SplitViewFactory {
     (id) => this.stateMap.get(id),
     (state) => this.session.write(state),
   );
+  private static splitReaderTab = new SplitReaderTabAdapter({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getInternalReader: (browser) =>
+      readerRuntime.getInternalReaderFromBrowser(browser),
+    setContextPaneOpen: (browser, open) =>
+      splitContextPane.setReaderOpen(browser, open),
+  });
   private static sync = new SplitSync({
     getState: (id) => this.stateMap.get(id),
     getEffectivePrimarySide: (state) => this.getEffectivePrimarySide(state),
@@ -880,145 +888,16 @@ export class SplitViewFactory {
     // 4. Close current reader (but don't close tab)
     await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
-    // 5. Replace tab container to remove old event listeners
-    // The old ReaderTab added event listeners for tab-bottom-placeholder-resize,
-    // tab-context-pane-toggle, and tab-selection-change that reference the dead reader.
-    // Cloning without events removes these stale listeners.
-    const newContainer = container.cloneNode(false) as HTMLElement;
-    container.parentNode?.replaceChild(newContainer, container);
-
-    // Restore TabContent custom element methods on the cloned container.
-    // cloneNode may not preserve custom element prototype methods, so Zotero's
-    // contextPane.update() calling tabContent.setContextPaneOpen() would fail.
-    // These methods just dispatch events that our listeners below will handle.
-    (newContainer as any).setContextPaneOpen = function (open: boolean) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-context-pane-toggle", {
-          detail: { open },
-        }),
-      );
-    };
-    (newContainer as any).setBottomPlaceholderHeight = function (
-      height: number,
-    ) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-bottom-placeholder-resize", {
-          detail: { height },
-        }),
-      );
-    };
-    (newContainer as any).onTabSelectionChanged = function (selected: boolean) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-selection-change", {
-          detail: { selected },
-        }),
-      );
-    };
-
-    // Reset container styles to ensure proper flex layout
-    (newContainer as any).style.display = "flex";
-    (newContainer as any).style.flexDirection = "row";
-    (newContainer as any).style.width = "100%";
-    (newContainer as any).style.height = "100%";
-    (newContainer as any).style.overflow = "hidden";
-
-    // 6. Build split view layout
-    const mainHbox = win.document.createXULElement("hbox") as XULElement;
-    (mainHbox as any).style.display = "flex";
-    (mainHbox as any).style.flexDirection = "row";
-    (mainHbox as any).style.flex = "1 1 100%";
-    (mainHbox as any).style.width = "100%";
-    (mainHbox as any).style.height = "100%";
-    (mainHbox as any).style.minWidth = "0";
-    (mainHbox as any).style.overflow = "hidden";
-    (mainHbox as any).style.boxSizing = "border-box";
-
-    const leftBrowser = this.layout.createReaderBrowser(win);
-    const rightBrowser = this.layout.createReaderBrowser(win);
-
-    const resizer = win.document.createXULElement("box") as XULElement;
-    resizer.className = "split-view-resizer";
-    (resizer as any).style.cssText = `
-      width: 1px;
-      min-width: 1px;
-      max-width: 1px;
-      flex: 0 0 1px;
-      cursor: ew-resize;
-      background: var(--fill-quarternary, rgba(0, 0, 0, 0.1));
-      position: relative;
-      z-index: 100;
-      box-sizing: border-box;
-    `;
-    resizer.setAttribute("mousethrough", "never");
-
-    const leftPopupset = win.document.createXULElement(
-      "popupset",
-    ) as XULElement;
-    const rightPopupset = win.document.createXULElement(
-      "popupset",
-    ) as XULElement;
-
-    mainHbox.appendChild(leftBrowser);
-    mainHbox.appendChild(resizer);
-    mainHbox.appendChild(rightBrowser);
-    newContainer.appendChild(mainHbox);
-    newContainer.appendChild(leftPopupset);
-    newContainer.appendChild(rightPopupset);
-
-    // Set up event listeners for tab content events (replacing the dead reader's listeners)
-    // Handlers are stored so they can be tracked in state after state creation.
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const bottomPlaceholderHandler = (event: any) => {
-      const s = self.stateMap.get(tabID);
-      if (!s || s.isCleaningUp) return;
-      const height =
-        event.detail?.height !== undefined ? event.detail.height : null;
-      try {
-        const leftReader = readerRuntime.getInternalReaderFromBrowser(
-          s.leftBrowser,
-        );
-        const rightReader = readerRuntime.getInternalReaderFromBrowser(
-          s.rightBrowser,
-        );
-        if (leftReader?.setBottomPlaceholderHeight) {
-          leftReader.setBottomPlaceholderHeight(height);
-        }
-        if (rightReader?.setBottomPlaceholderHeight) {
-          rightReader.setBottomPlaceholderHeight(height);
-        }
-      } catch {
-        // Ignore errors - readers may not be ready
-      }
-    };
-
-    const contextPaneToggleHandler = (event: any) => {
-      const s = self.stateMap.get(tabID);
-      if (!s || s.isCleaningUp) return;
-      const open = event.detail?.open ?? false;
-      if (s.rightBrowser) {
-        splitContextPane.setReaderOpen(s.rightBrowser, open);
-      }
-    };
-
-    const tabSelectionChangeHandler = (_event: any) => {
-      // No special handling needed for split view
-    };
-
-    // Listeners are added here; they will be tracked in state after state creation below
-    newContainer.addEventListener(
-      "tab-bottom-placeholder-resize",
-      bottomPlaceholderHandler,
-    );
-    newContainer.addEventListener(
-      "tab-context-pane-toggle",
-      contextPaneToggleHandler,
-    );
-    newContainer.addEventListener(
-      "tab-selection-change",
-      tabSelectionChangeHandler,
-    );
+    const {
+      container: newContainer,
+      mainHbox,
+      leftBrowser,
+      rightBrowser,
+      resizer,
+      leftPopupset,
+      rightPopupset,
+      eventListeners,
+    } = this.splitReaderTab.create(win, tabID, container);
 
     // Get parent item IDs for context pane switching
     const leftParentItemID = leftItem.parentItemID || leftItem.id;
@@ -1059,7 +938,7 @@ export class SplitViewFactory {
       sidebarToggleTimers: [],
       ctrlPressed: false,
       zoomingCount: 0,
-      eventListeners: [],
+      eventListeners,
       timeoutIds: [],
       toolbarCloseObservers: [],
       contextPaneObserver: null,
@@ -1077,25 +956,6 @@ export class SplitViewFactory {
       originalTitle,
     };
     this.stateMap.set(tabID, newState);
-
-    // Track container event listeners that were added before state creation
-    newState.eventListeners.push(
-      {
-        target: newContainer,
-        type: "tab-bottom-placeholder-resize",
-        listener: bottomPlaceholderHandler as EventListener,
-      },
-      {
-        target: newContainer,
-        type: "tab-context-pane-toggle",
-        listener: contextPaneToggleHandler as EventListener,
-      },
-      {
-        target: newContainer,
-        type: "tab-selection-change",
-        listener: tabSelectionChangeHandler as EventListener,
-      },
-    );
 
     // Set up drag functionality
     this.layout.setupResizerDrag(
@@ -1227,140 +1087,17 @@ export class SplitViewFactory {
     // 3. Close current reader (but don't close tab)
     await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
-    // 4. Replace tab container to remove old event listeners
-    const newContainer = container.cloneNode(false) as HTMLElement;
-    container.parentNode?.replaceChild(newContainer, container);
-
-    // Restore TabContent custom element methods on the cloned container.
-    // cloneNode may not preserve custom element prototype methods, so Zotero's
-    // contextPane.update() calling tabContent.setContextPaneOpen() would fail.
-    (newContainer as any).setContextPaneOpen = function (open: boolean) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-context-pane-toggle", {
-          detail: { open },
-        }),
-      );
-    };
-    (newContainer as any).setBottomPlaceholderHeight = function (
-      height: number,
-    ) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-bottom-placeholder-resize", {
-          detail: { height },
-        }),
-      );
-    };
-    (newContainer as any).onTabSelectionChanged = function (selected: boolean) {
-      this.dispatchEvent(
-        new win.CustomEvent("tab-selection-change", {
-          detail: { selected },
-        }),
-      );
-    };
-
-    // Reset container styles
-    (newContainer as any).style.display = "flex";
-    (newContainer as any).style.flexDirection = "row";
-    (newContainer as any).style.width = "100%";
-    (newContainer as any).style.height = "100%";
-    (newContainer as any).style.overflow = "hidden";
-
-    // 5. Build split view layout
-    const mainHbox = win.document.createXULElement("hbox") as XULElement;
-    (mainHbox as any).style.display = "flex";
-    (mainHbox as any).style.flexDirection = "row";
-    (mainHbox as any).style.flex = "1 1 100%";
-    (mainHbox as any).style.width = "100%";
-    (mainHbox as any).style.height = "100%";
-    (mainHbox as any).style.minWidth = "0";
-    (mainHbox as any).style.overflow = "hidden";
-    (mainHbox as any).style.boxSizing = "border-box";
-
-    const leftBrowser = this.layout.createReaderBrowser(win);
-    const rightBrowser = this.layout.createReaderBrowser(win);
-
-    const resizer = win.document.createXULElement("box") as XULElement;
-    resizer.className = "split-view-resizer";
-    (resizer as any).style.cssText = `
-      width: 1px;
-      min-width: 1px;
-      max-width: 1px;
-      flex: 0 0 1px;
-      cursor: ew-resize;
-      background: var(--fill-quarternary, rgba(0, 0, 0, 0.1));
-      position: relative;
-      z-index: 100;
-      box-sizing: border-box;
-    `;
-    resizer.setAttribute("mousethrough", "never");
-
-    const leftPopupset = win.document.createXULElement(
-      "popupset",
-    ) as XULElement;
-    const rightPopupset = win.document.createXULElement(
-      "popupset",
-    ) as XULElement;
-
-    mainHbox.appendChild(leftBrowser);
-    mainHbox.appendChild(resizer);
-    mainHbox.appendChild(rightBrowser);
-    newContainer.appendChild(mainHbox);
-    newContainer.appendChild(leftPopupset);
-    newContainer.appendChild(rightPopupset);
-
-    // Set up event listeners for tab content events
-    // Handlers are stored so they can be tracked in state after state creation.
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const bottomPlaceholderHandler2 = (event: any) => {
-      const s = self.stateMap.get(tabID);
-      if (!s || s.isCleaningUp) return;
-      const height =
-        event.detail?.height !== undefined ? event.detail.height : null;
-      try {
-        const leftReader = readerRuntime.getInternalReaderFromBrowser(
-          s.leftBrowser,
-        );
-        const rightReader = readerRuntime.getInternalReaderFromBrowser(
-          s.rightBrowser,
-        );
-        if (leftReader?.setBottomPlaceholderHeight) {
-          leftReader.setBottomPlaceholderHeight(height);
-        }
-        if (rightReader?.setBottomPlaceholderHeight) {
-          rightReader.setBottomPlaceholderHeight(height);
-        }
-      } catch {
-        // Ignore errors
-      }
-    };
-
-    const contextPaneToggleHandler2 = (event: any) => {
-      const s = self.stateMap.get(tabID);
-      if (!s || s.isCleaningUp) return;
-      const open = event.detail?.open ?? false;
-      if (s.rightBrowser) {
-        splitContextPane.setReaderOpen(s.rightBrowser, open);
-      }
-    };
-
-    const tabSelectionChangeHandler2 = () => {
-      // No special handling needed
-    };
-
-    newContainer.addEventListener(
-      "tab-bottom-placeholder-resize",
-      bottomPlaceholderHandler2,
-    );
-    newContainer.addEventListener(
-      "tab-context-pane-toggle",
-      contextPaneToggleHandler2,
-    );
-    newContainer.addEventListener(
-      "tab-selection-change",
-      tabSelectionChangeHandler2,
-    );
+    const shell = this.splitReaderTab.create(win, tabID, container);
+    const {
+      container: newContainer,
+      mainHbox,
+      leftBrowser,
+      rightBrowser,
+      resizer,
+      leftPopupset,
+      rightPopupset,
+      eventListeners,
+    } = shell;
 
     // Get parent item ID for context pane
     const parentItemID = item.parentItemID || item.id;
@@ -1401,7 +1138,7 @@ export class SplitViewFactory {
       sidebarToggleTimers: [],
       ctrlPressed: false,
       zoomingCount: 0,
-      eventListeners: [],
+      eventListeners,
       timeoutIds: [],
       toolbarCloseObservers: [],
       contextPaneObserver: null,
@@ -1419,25 +1156,6 @@ export class SplitViewFactory {
       originalTitle,
     };
     this.stateMap.set(tabID, newState);
-
-    // Track container event listeners that were added before state creation
-    newState.eventListeners.push(
-      {
-        target: newContainer,
-        type: "tab-bottom-placeholder-resize",
-        listener: bottomPlaceholderHandler2 as EventListener,
-      },
-      {
-        target: newContainer,
-        type: "tab-context-pane-toggle",
-        listener: contextPaneToggleHandler2 as EventListener,
-      },
-      {
-        target: newContainer,
-        type: "tab-selection-change",
-        listener: tabSelectionChangeHandler2 as EventListener,
-      },
-    );
 
     // Set up drag functionality
     this.layout.setupResizerDrag(

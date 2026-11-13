@@ -146,11 +146,8 @@ test("mouse release persists the final ratio and removes all temporary listeners
   assert.equal(rt.state.eventListeners.length, 2);
 });
 
-test("reader browsers use proportional flex sizing and preserve content attributes", () => {
+test("browser panes use proportional flex sizing", () => {
   const rt = setup();
-  const browser = rt.layout.createReaderBrowser(rt.win);
-  assert.equal(browser.attributes.src, "resource://zotero/reader/reader.html");
-  assert.equal(browser.style.flex, "1 1 0");
   rt.layout.updateBrowserFlex(rt.left, rt.right, 0.35);
   assert.equal(rt.left.style.flex, "350 1 0");
   assert.equal(rt.right.style.flex, "650 1 0");
