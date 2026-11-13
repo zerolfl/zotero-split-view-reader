@@ -1,3 +1,5 @@
+import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
+import { SplitReadAloudService } from "./splitView/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -6,97 +8,17 @@ import {
   type SplitTabsTitleMode,
 } from "../utils/splitTabTitle";
 
-/**
- * Split View Tab - Single tab with two side-by-side PDF readers.
- *
- * Features:
- * 1. Opens two PDF readers in a single Zotero tab
- * 2. Horizontal split layout with draggable splitter
- * 3. Bidirectional scroll/page sync (preference-controlled; no context menu toggle)
- * 4. Each reader has complete annotation support
- */
-
-interface TrackedEventListener {
-  target: EventTarget;
-  type: string;
-  listener: EventListener;
-  options?: boolean | AddEventListenerOptions;
-}
-
-interface ToolbarCloseObserver {
-  side: "left" | "right";
-  observer: MutationObserver;
-}
-
-interface SplitTabState {
-  tabID: string;
-  container: XUL.Box;
-  leftBrowser: XULBrowserElement;
-  rightBrowser: XULBrowserElement;
-  leftPopupset: XULElement;
-  rightPopupset: XULElement;
-  leftItemID: number;
-  rightItemID: number;
-  leftParentItemID: number;
-  rightParentItemID: number;
-  primarySide: "left" | "right" | null;
-  activeSide: "left" | "right";
-  readAloudSide: "left" | "right" | null;
-  readAloudStatuses: {
-    left: any | null;
-    right: any | null;
-  };
-  scrollHandler: (() => void) | null;
-  scrollHandlerBrowser: XULBrowserElement | null;
-  lastPrimaryScroll: { top: number; left: number } | null;
-  syncPaused: boolean;
-  sidebarToggleTimers: number[];
-  ctrlPressed: boolean;
-  zoomingCount: number;
-  // Resource tracking for proper cleanup
-  eventListeners: TrackedEventListener[];
-  timeoutIds: number[];
-  toolbarCloseObservers: ToolbarCloseObserver[];
-  // Cached viewer containers to avoid repeated DOM queries
-  leftViewerContainer: Element | null;
-  rightViewerContainer: Element | null;
-  // Split ratio for proportional resizing (0-1, left side proportion)
-  splitRatio: number;
-  // Track view states for saving to disk
-  leftViewState: any;
-  rightViewState: any;
-  // Original tab title before enabling split view (for future extensions)
-  originalTitle?: string;
-  // Track if cleanup is in progress to avoid dead object errors
-  isCleaningUp: boolean;
-  // Same PDF split view specific fields
-  isSamePDF: boolean;
-  annotationNotifierID: string | null;
-  isSyncingSelection: boolean;
-  annotationItemIDs: number[]; // Track current PDF's annotation IDs for delete sync
-  // requestAnimationFrame pending flag for scroll sync batching
-  scrollSyncRAFPending: boolean;
-  // Last scroll sync timestamp for throttling (ms)
-  lastScrollSyncTime: number;
-  // Resize debounce timer ID for cleanup
-  resizeTimerId: number | null;
-  // Full-screen overlay during resizer drag; removed on cleanup so UI is not stuck
-  dragOverlay?: HTMLElement | null;
-}
-
-interface SeparateViewTarget {
-  itemID: number;
-  tabID: string | null;
-  viewState: any;
-  side: "left" | "right";
-}
-
 /** Command id for the Split-View Reader prompt command; used for unregister to avoid leaks. */
 const SPLIT_VIEW_PROMPT_COMMAND_ID = "split-view-reader";
 
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
+  private static readAloud = new SplitReadAloudService({
+    states: () => this.stateMap.values(),
+    getReader: (browser) => this.getInternalReaderFromBrowser(browser),
+    isActive: (browser) => !!this.getActiveSplitReaderInfoByBrowser(browser),
+  });
   /** Global tab notifier ID - shared across all split view tabs */
   private static globalTabNotifierID: string | null = null;
   /** Session restore notifier ID - for detecting tabs that need split view restoration */
@@ -111,12 +33,6 @@ export class SplitViewFactory {
   private static splitTabsTitlePrefObserverID: symbol | null = null;
   /** Item notifier ID for split tab title updates when either side's item changes */
   private static splitTabTitleItemNotifierID: string | null = null;
-  /** Preference observer ID for Read Aloud voices - updates open split readers */
-  private static readAloudVoicesPrefObserverID: symbol | null = null;
-  /** Original IOUtils.writeJSON before installing the Read Aloud enabled voices hook */
-  private static originalIOUtilsWriteJSON: any = null;
-  /** Read Aloud first-run dialog is global per voice language, even when two split readers initialize together. */
-  private static readAloudFirstRunDialogLangs: Set<string> = new Set();
   /** Last tab that opened Zotero's tab context menu. */
   private static tabShowInLibraryContext: {
     tabID: string;
@@ -129,356 +45,6 @@ export class SplitViewFactory {
     popuphidden: EventListener;
   } | null = null;
   private static tabShowInLibraryDocument: Document | null = null;
-
-  private static getReadAloudEnabledVoicesPath(): string | null {
-    try {
-      return PathUtils.join(
-        (Zotero as any).Profile.dir,
-        "readAloudEnabledVoices.json",
-      );
-    } catch {
-      return null;
-    }
-  }
-
-  private static isReadAloudAvailable(): boolean {
-    try {
-      return (
-        !!(Zotero as any).Profile?.dir &&
-        !!(Zotero.Sync as any)?.Runner &&
-        typeof (Zotero.Sync as any)?.Runner.getAPIClient === "function" &&
-        typeof Zotero.getMainWindow()?.openDialog === "function"
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  private static getReadAloudVoices(): any {
-    try {
-      return JSON.parse(String(Zotero.Prefs.get("reader.readAloudVoices")));
-    } catch {
-      return {};
-    }
-  }
-
-  private static forEachSplitReadAloudReader(
-    callback: (
-      reader: any,
-      targetWindow: Window,
-      browser: XULBrowserElement,
-    ) => void,
-  ): void {
-    for (const state of this.stateMap.values()) {
-      if (state.isCleaningUp) continue;
-      for (const browser of [state.leftBrowser, state.rightBrowser]) {
-        try {
-          const reader = this.getInternalReaderFromBrowser(browser);
-          const targetWindow = browser.contentWindow;
-          if (reader && targetWindow) {
-            callback(reader, targetWindow, browser);
-          }
-        } catch {
-          // Reader may be gone during cleanup
-        }
-      }
-    }
-  }
-
-  private static syncReadAloudVoicesToSplitReaders(voices: any): void {
-    this.forEachSplitReadAloudReader((reader, targetWindow) => {
-      try {
-        reader?.setReadAloudVoices?.(
-          Components.utils.cloneInto(voices, targetWindow),
-        );
-      } catch {
-        // Ignore split readers that are unloading
-      }
-    });
-  }
-
-  private static syncReadAloudEnabledVoicesToNormalReaders(voices: any): void {
-    try {
-      const readers = (Zotero.Reader as any)._readers || [];
-      for (const reader of readers) {
-        try {
-          reader?._handleReadAloudEnabledVoicesChange?.(voices);
-        } catch (e) {
-          Zotero.logError(e as Error);
-        }
-      }
-    } catch {
-      // Ignore if Zotero.Reader internals are unavailable
-    }
-  }
-
-  private static syncReadAloudEnabledVoicesToSplitReaders(voices: any): void {
-    this.forEachSplitReadAloudReader((reader, targetWindow) => {
-      if (reader?.setReadAloudEnabledVoices) {
-        reader.setReadAloudEnabledVoices(
-          Components.utils.cloneInto(voices, targetWindow),
-        );
-      }
-    });
-  }
-
-  private static installReadAloudEnabledVoicesWriteHook(): void {
-    if (this.originalIOUtilsWriteJSON) return;
-
-    const originalWriteJSON = IOUtils.writeJSON;
-    this.originalIOUtilsWriteJSON = originalWriteJSON;
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    (IOUtils as any).writeJSON = async function (
-      path: string,
-      data: any,
-      ...args: any[]
-    ) {
-      const result = await originalWriteJSON.call(this, path, data, ...args);
-      try {
-        const enabledVoicesPath = self.getReadAloudEnabledVoicesPath();
-        if (enabledVoicesPath && String(path) === enabledVoicesPath) {
-          self.syncReadAloudEnabledVoicesToNormalReaders(data);
-          self.syncReadAloudEnabledVoicesToSplitReaders(data);
-        }
-      } catch (e) {
-        Zotero.debug(
-          `Split view: readAloudEnabledVoices write hook failed: ${e}`,
-        );
-      }
-      return result;
-    };
-  }
-
-  private static uninstallReadAloudEnabledVoicesWriteHook(): void {
-    if (!this.originalIOUtilsWriteJSON) return;
-    (IOUtils as any).writeJSON = this.originalIOUtilsWriteJSON;
-    this.originalIOUtilsWriteJSON = null;
-  }
-
-  private static setReadAloudVoice({
-    lang,
-    region,
-    voice,
-    speed,
-    tier,
-  }: any): void {
-    const existing = this.getReadAloudVoices()[lang] || {};
-    const tierVoices = { ...(existing.tierVoices || {}) };
-    if (tier) {
-      delete tierVoices[tier];
-      tierVoices[tier] = voice;
-    }
-    const voices = {
-      ...this.getReadAloudVoices(),
-      [lang]: { region, voice, speed, tierVoices },
-    };
-    Zotero.Prefs.set("reader.readAloudVoices", JSON.stringify(voices));
-    this.syncReadAloudVoicesToSplitReaders(voices);
-    this.readAloudFirstRunDialogLangs.delete(lang);
-  }
-
-  private static hasReadAloudVoice(lang: string): boolean {
-    const voiceData = this.getReadAloudVoices()[lang];
-    return !!voiceData?.voice;
-  }
-
-  private static async getReadAloudEnabledVoices(): Promise<any> {
-    const path = this.getReadAloudEnabledVoicesPath();
-    if (!path) return {};
-    try {
-      return await IOUtils.readJSON(path);
-    } catch {
-      return {};
-    }
-  }
-
-  private static async setReadAloudEnabledVoices(
-    enabledVoicesByLang: Record<string, any>,
-  ): Promise<void> {
-    const path = this.getReadAloudEnabledVoicesPath();
-    if (!path) return;
-
-    const existing = await this.getReadAloudEnabledVoices();
-    for (const [lang, enabledByTier] of Object.entries(enabledVoicesByLang)) {
-      existing[lang] = { ...(existing[lang] || {}), ...enabledByTier };
-    }
-    await IOUtils.writeJSON(path, existing);
-
-    this.syncReadAloudEnabledVoicesToNormalReaders(existing);
-    this.syncReadAloudEnabledVoicesToSplitReaders(existing);
-  }
-
-  private static getReadAloudRemoteInterface(targetWindow: Window): any {
-    try {
-      const mainWindow = Zotero.getMainWindow() as any;
-      if (!mainWindow?.caches || !(Zotero.Sync as any)?.Runner) return null;
-
-      const audioCache = mainWindow.caches.open("read-aloud");
-      return {
-        getVoices: () => {
-          return new (targetWindow as any).Promise(async (resolve: any) => {
-            const apiKey = await (Zotero.Sync as any).Data.Local.getAPIKey();
-            const client = (Zotero.Sync as any).Runner.getAPIClient({ apiKey });
-            const result = await client.getReadAloudVoices();
-            resolve(Components.utils.cloneInto(result, targetWindow));
-          });
-        },
-        getAudio: (segment: any, voice: any) => {
-          return new (targetWindow as any).Promise(async (resolve: any) => {
-            const cacheURL =
-              "https://read-aloud.zotero.invalid/audio?" +
-              new URLSearchParams({ voice: voice.id, text: segment.text });
-            let cache: Cache | null = null;
-            try {
-              cache = await audioCache;
-              if (!cache) return;
-              const cached = await cache.match(cacheURL);
-              if (cached) {
-                resolve(
-                  Components.utils.cloneInto(
-                    { audio: await cached.blob() },
-                    targetWindow,
-                  ),
-                );
-                return;
-              }
-            } catch (e) {
-              Zotero.logError(e as Error);
-            }
-
-            const apiKey =
-              segment === "sample"
-                ? null
-                : await (Zotero.Sync as any).Data.Local.getAPIKey();
-            const client = (Zotero.Sync as any).Runner.getAPIClient({ apiKey });
-            const result = await client.getReadAloudAudio(segment, voice.id);
-            if (result.audio && cache) {
-              try {
-                await cache.put(cacheURL, new Response(result.audio));
-              } catch (e) {
-                Zotero.logError(e as Error);
-              }
-            }
-            resolve(Components.utils.cloneInto(result, targetWindow));
-          });
-        },
-        getCreditsRemaining: () => {
-          return new (targetWindow as any).Promise(async (resolve: any) => {
-            const apiKey = await (Zotero.Sync as any).Data.Local.getAPIKey();
-            const client = (Zotero.Sync as any).Runner.getAPIClient({ apiKey });
-            resolve(
-              Components.utils.cloneInto(
-                await client.getReadAloudCreditsRemaining(),
-                targetWindow,
-              ),
-            );
-          });
-        },
-        resetCredits: () => {
-          return new (targetWindow as any).Promise(async (resolve: any) => {
-            const apiKey = await (Zotero.Sync as any).Data.Local.getAPIKey();
-            const client = (Zotero.Sync as any).Runner.getAPIClient({ apiKey });
-            resolve(
-              Components.utils.cloneInto(
-                await client.resetReadAloudCredits(),
-                targetWindow,
-              ),
-            );
-          });
-        },
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  private static openReadAloudFirstRunDialog(
-    browser: XULBrowserElement,
-    lang: string,
-    ftl: string[],
-  ): void {
-    if (
-      !this.getActiveSplitReaderInfoByBrowser(browser) ||
-      this.hasReadAloudVoice(lang) ||
-      this.readAloudFirstRunDialogLangs.has(lang)
-    ) {
-      return;
-    }
-    this.readAloudFirstRunDialogLangs.add(lang);
-
-    setTimeout(async () => {
-      try {
-        if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-        const win = browser.contentWindow;
-        if (!win || this.hasReadAloudVoice(lang)) return;
-        const io: any = {
-          dataIn: {
-            lang,
-            readAloudEnabledVoices: await this.getReadAloudEnabledVoices(),
-            ftl,
-            getReadAloudRemoteInterface: (targetWindow: Window) =>
-              this.getReadAloudRemoteInterface(targetWindow),
-          },
-          dataOut: null,
-          openVoicesDialog: ({ tier }: any) => {
-            setTimeout(async () => {
-              if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-              await this.openReadAloudVoicesDialog(browser, lang, tier, ftl);
-              if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-              io.updateEnabledVoices?.(await this.getReadAloudEnabledVoices());
-            });
-          },
-        };
-        Zotero.getMainWindow().openDialog(
-          "chrome://zotero/content/readAloudFirstRunDialog.xhtml",
-          "",
-          "chrome,modal,centerscreen,resizable=no",
-          io,
-        );
-        if (io.dataOut) {
-          if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-          this.setReadAloudVoice(io.dataOut);
-          this.getInternalReaderFromBrowser(browser)?.toggleReadAloudPopup?.(
-            true,
-          );
-        }
-      } finally {
-        this.readAloudFirstRunDialogLangs.delete(lang);
-      }
-    });
-  }
-
-  private static async openReadAloudVoicesDialog(
-    browser: XULBrowserElement,
-    lang: string,
-    tier: string,
-    ftl: string[],
-  ): Promise<void> {
-    if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-    const io: any = {
-      dataIn: {
-        lang,
-        tier,
-        readAloudEnabledVoices: await this.getReadAloudEnabledVoices(),
-        ftl,
-        getReadAloudRemoteInterface: (targetWindow: Window) =>
-          this.getReadAloudRemoteInterface(targetWindow),
-      },
-      dataOut: null,
-    };
-    Zotero.getMainWindow().openDialog(
-      "chrome://zotero/content/readAloudVoicesDialog.xhtml",
-      "",
-      "chrome,modal,centerscreen,resizable=no",
-      io,
-    );
-    if (io.dataOut) {
-      if (!this.getActiveSplitReaderInfoByBrowser(browser)) return;
-      await this.setReadAloudEnabledVoices(io.dataOut);
-    }
-  }
 
   /**
    * Look up state for a specific tab
@@ -1671,13 +1237,7 @@ export class SplitViewFactory {
       true,
     );
 
-    this.readAloudVoicesPrefObserverID = Zotero.Prefs.registerObserver(
-      "reader.readAloudVoices",
-      () => {
-        this.syncReadAloudVoicesToSplitReaders(this.getReadAloudVoices());
-      },
-    );
-    this.installReadAloudEnabledVoicesWriteHook();
+    this.readAloud.register();
   }
 
   /**
@@ -1827,17 +1387,7 @@ export class SplitViewFactory {
       }
       this.splitTabTitleItemNotifierID = null;
     }
-    if (this.readAloudVoicesPrefObserverID) {
-      try {
-        Zotero.Prefs.unregisterObserver(this.readAloudVoicesPrefObserverID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: unregisterAll - unregisterObserver(readAloudVoices) failed: ${e}`,
-        );
-      }
-      this.readAloudVoicesPrefObserverID = null;
-    }
-    this.uninstallReadAloudEnabledVoicesWriteHook();
+    this.readAloud.unregister();
 
     // Restore Zotero_Tabs.getTabIDByItemID to avoid holding references and stale tab IDs
     this.unregisterTabLookup();
@@ -4047,13 +3597,11 @@ export class SplitViewFactory {
     const itemRef = item;
     const browserRef = browser;
     const popupsetRef = popupset;
-    const readAloudEnabled = this.isReadAloudAvailable();
-    const readAloudEnabledVoices = readAloudEnabled
-      ? await this.getReadAloudEnabledVoices()
-      : {};
-    const readAloudRemoteInterface = readAloudEnabled
-      ? this.getReadAloudRemoteInterface(win)
-      : null;
+    const readAloudConfig = await this.readAloud.getReaderConfig(
+      browser,
+      ftl,
+      (status) => this.handleReadAloudStatus(tabID, browser, status),
+    );
 
     // Only show context pane toggle button on the RIGHT browser
     // The right reader's toggle controls the global context pane
@@ -4108,15 +3656,7 @@ export class SplitViewFactory {
       autoDisableTextTool: Zotero.Prefs.get("reader.autoDisableTool.text"),
       autoDisableImageTool: Zotero.Prefs.get("reader.autoDisableTool.image"),
       sidebarView: Zotero.Prefs.get("reader.lastSidebarTab"),
-      ...(readAloudEnabled
-        ? {
-            enableReadAloud: true,
-            readAloudVoices: this.getReadAloudVoices(),
-            readAloudEnabledVoices,
-            readAloudRemoteInterface,
-            loggedIn: !!(Zotero.Sync as any)?.Runner?.enabled,
-          }
-        : {}),
+      ...readAloudConfig,
       // Pass viewState to restore position
       primaryViewState: viewState,
       // Required callbacks - defined as regular functions
@@ -4207,46 +3747,6 @@ export class SplitViewFactory {
           }, 50);
         }
       },
-      ...(readAloudEnabled
-        ? {
-            onSetReadAloudVoice: (data: any) => {
-              self.setReadAloudVoice(data);
-            },
-            onSetReadAloudEnabledVoices: async (data: any) => {
-              await self.setReadAloudEnabledVoices(data);
-            },
-            onSetReadAloudStatus: (status: any) => {
-              self.handleReadAloudStatus(tabID, browserRef, status);
-            },
-            onPurchaseReadAloudCredits: () => {
-              try {
-                const { ZOTERO_CONFIG } = ChromeUtils.importESModule(
-                  "resource://zotero/config.mjs",
-                ) as any;
-                const url = ZOTERO_CONFIG?.READ_ALOUD_URL;
-                if (url) Zotero.launchURL(url);
-              } catch {
-                // Ignore if config is unavailable
-              }
-            },
-            onLogIn: () => {
-              setTimeout(() =>
-                (Zotero.Utilities.Internal as any).openPreferences(
-                  "zotero-prefpane-account",
-                  { action: "logIn" },
-                ),
-              );
-            },
-            onOpenReadAloudFirstRunPopup: ({ lang }: any) => {
-              self.openReadAloudFirstRunDialog(browserRef, lang, ftl);
-            },
-            onOpenReadAloudVoicesPopup: ({ lang, tier }: any) => {
-              setTimeout(() => {
-                self.openReadAloudVoicesDialog(browserRef, lang, tier, ftl);
-              });
-            },
-          }
-        : {}),
     };
 
     // Clone entire config once with wrapReflectors and cloneFunctions
