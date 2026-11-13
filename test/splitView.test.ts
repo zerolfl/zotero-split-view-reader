@@ -304,7 +304,11 @@ describe("split reader integration", function () {
   it("swaps different PDFs together with their view positions and session data", async function () {
     const state = await open(false);
     factory.setPrimarySide(state.tabID, null);
-    factory.activateSide(state.tabID, "right", Zotero.getMainWindow());
+    factory.interactions.activateSide(
+      state.tabID,
+      "right",
+      Zotero.getMainWindow(),
+    );
 
     const oldLeft = readerRuntime.getInternalReaderFromBrowser(
       state.leftBrowser,

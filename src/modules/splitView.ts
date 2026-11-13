@@ -29,6 +29,7 @@ import { PDFReplacementService } from "./splitView/pdfReplacement";
 import { SplitReaderBrowserAdapter } from "../platform/splitReaderBrowser";
 import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
 import { pauseNativeReaders } from "../platform/readAloud";
+import { SplitInteractions } from "./splitView/interactions";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -118,7 +119,8 @@ export class SplitViewFactory {
     selectAndLoadPDF: (id, side) => this.selectAndLoadPDF(id, side),
     syncPositionAndScale: (id, side) =>
       this.sync.syncPositionAndScale(id, side),
-    activateSide: (id, side, win) => this.activateSide(id, side, win),
+    activateSide: (id, side, win) =>
+      this.interactions.activateSide(id, side, win),
     refreshPrimaryMenuItem: (item, id, side) =>
       this.refreshPrimaryMenuItemElement(item, id, side),
   });
@@ -158,6 +160,13 @@ export class SplitViewFactory {
       popup.startCloseTimer(2000);
     },
   });
+  private static interactions = new SplitInteractions({
+    getState: (tabID) => this.stateMap.get(tabID),
+    getEffectivePrimarySide: (state) => this.getEffectivePrimarySide(state),
+    sync: this.sync,
+    trackEventListener: (...args) => this.trackEventListener(...args),
+    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+  });
   private static readerHost = new SplitReaderHost();
   private static pdfSwap = new PDFSwapService({
     getState: (tabID) => this.stateMap.get(tabID) || null,
@@ -167,8 +176,10 @@ export class SplitViewFactory {
     getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
     getMainWindow: () => Zotero.getMainWindow(),
     initializeReader: (...args) => this.initializeReader(...args),
-    setupFocusListeners: (...args) => this.setupFocusListeners(...args),
-    setupCtrlKeyListener: (...args) => this.setupCtrlKeyListener(...args),
+    setupFocusListeners: (...args) =>
+      this.interactions.setupFocusListeners(...args),
+    setupCtrlKeyListener: (...args) =>
+      this.interactions.setupCtrlKeyListener(...args),
     setupZoomButtonListeners: (tabID, browser) =>
       this.sync.setupZoomButtonListeners(tabID, browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
@@ -192,8 +203,9 @@ export class SplitViewFactory {
     getMainWindow: () => Zotero.getMainWindow(),
     initializeReader: (...args) => this.initializeReader(...args),
     setupBrowserFocusListeners: (...args) =>
-      this.setupBrowserFocusListeners(...args),
-    setupCtrlKeyListener: (...args) => this.setupCtrlKeyListener(...args),
+      this.interactions.setupBrowserFocusListeners(...args),
+    setupCtrlKeyListener: (...args) =>
+      this.interactions.setupCtrlKeyListener(...args),
     setupZoomButtonListeners: (tabID, browser) =>
       this.sync.setupZoomButtonListeners(tabID, browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
@@ -1021,7 +1033,12 @@ export class SplitViewFactory {
       }
 
       // Set up focus listeners
-      this.setupFocusListeners(tabID, leftBrowser, rightBrowser, win);
+      this.interactions.setupFocusListeners(
+        tabID,
+        leftBrowser,
+        rightBrowser,
+        win,
+      );
 
       // Finish split-view setup after both readers initialize
       this.trackTimeout(
@@ -1029,13 +1046,13 @@ export class SplitViewFactory {
         () => {
           const s = this.stateMap.get(tabID);
           if (!s) return;
-          this.setupResizeListener(tabID, win);
-          this.setupCtrlKeyListener(tabID, leftBrowser);
-          this.setupCtrlKeyListener(tabID, rightBrowser);
-          this.setupMainWindowKeyboardListener(tabID, win);
+          this.interactions.setupResizeListener(tabID, win);
+          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
+          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
+          this.interactions.setupMainWindowKeyboardListener(tabID, win);
           this.sync.setupZoomButtonListeners(tabID, leftBrowser);
           this.sync.setupZoomButtonListeners(tabID, rightBrowser);
-          this.setupContextPaneObserver(tabID, win);
+          this.interactions.setupContextPaneObserver(tabID, win);
           if (s.primarySide) {
             this.sync.cacheViewerContainers(tabID);
             this.sync.initSyncState(tabID);
@@ -1221,7 +1238,12 @@ export class SplitViewFactory {
       }
 
       // Set up focus listeners
-      this.setupFocusListeners(tabID, leftBrowser, rightBrowser, win);
+      this.interactions.setupFocusListeners(
+        tabID,
+        leftBrowser,
+        rightBrowser,
+        win,
+      );
 
       bindSplitAnnotations(newState);
 
@@ -1231,13 +1253,13 @@ export class SplitViewFactory {
         () => {
           const s = this.stateMap.get(tabID);
           if (!s) return;
-          this.setupResizeListener(tabID, win);
-          this.setupCtrlKeyListener(tabID, leftBrowser);
-          this.setupCtrlKeyListener(tabID, rightBrowser);
-          this.setupMainWindowKeyboardListener(tabID, win);
+          this.interactions.setupResizeListener(tabID, win);
+          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
+          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
+          this.interactions.setupMainWindowKeyboardListener(tabID, win);
           this.sync.setupZoomButtonListeners(tabID, leftBrowser);
           this.sync.setupZoomButtonListeners(tabID, rightBrowser);
-          this.setupContextPaneObserver(tabID, win);
+          this.interactions.setupContextPaneObserver(tabID, win);
           if (s.primarySide) {
             this.sync.cacheViewerContainers(tabID);
             this.sync.initSyncState(tabID);
@@ -1548,7 +1570,11 @@ export class SplitViewFactory {
           mainWindow.setTimeout(() => {
             const s = this.stateMap.get(capturedTabID);
             if (!s || s.isCleaningUp) return;
-            this.activateSide(capturedTabID, currentSide, mainWindow);
+            this.interactions.activateSide(
+              capturedTabID,
+              currentSide,
+              mainWindow,
+            );
             this.refreshPrimaryMenuItemElement(
               primaryItem,
               capturedTabID,
@@ -1923,346 +1949,6 @@ export class SplitViewFactory {
     } catch (e) {
       Zotero.debug(`Split view: updateScrollbarColors error: ${e}`);
     }
-  }
-
-  /**
-   * Set up observer to watch context pane collapsed state changes
-   * When context pane is toggled via sidenav, update right reader's toggle button visibility
-   */
-  private static setupContextPaneObserver(tabID: string, win: Window) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-    splitContextPane.disconnectObserver(state.contextPaneObserver);
-    state.contextPaneObserver = splitContextPane.observeCollapsed(
-      win,
-      (isOpen) => {
-        const currentState = this.stateMap.get(tabID);
-        if (currentState?.rightBrowser) {
-          splitContextPane.setReaderOpen(currentState.rightBrowser, isOpen);
-        }
-      },
-    );
-  }
-
-  /**
-   * Set up Ctrl key listener on a browser's iframe to detect Ctrl+wheel zoom
-   * and Ctrl+Plus/Minus keyboard shortcuts for zoom sync
-   */
-  private static setupCtrlKeyListener(
-    tabID: string,
-    browser: XULBrowserElement,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    try {
-      const internalReader =
-        readerRuntime.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return;
-
-      const primaryView = internalReader._primaryView;
-      if (!primaryView) return;
-
-      const iframe = primaryView._iframe;
-      if (!iframe) return;
-
-      const iframeWin = iframe.contentWindow;
-      if (!iframeWin) return;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      const doc = wrappedWin.document;
-      if (!doc) return;
-
-      // Also get the reader.html window for keyboard events
-      const readerWin = browser.contentWindow;
-      const wrappedReaderWin = readerWin
-        ? (readerWin as any).wrappedJSObject || readerWin
-        : null;
-
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const self = this;
-
-      const keydownHandler = (e: KeyboardEvent) => {
-        const s = self.stateMap.get(tabID);
-        if (!s) return;
-
-        if (e.key === "Control") {
-          s.ctrlPressed = true;
-          return;
-        }
-
-        // Note: Ctrl+Plus/Minus zoom sync is handled by setupMainWindowKeyboardListener
-        // to avoid duplicate handling when events propagate through multiple layers
-      };
-      // Use capture phase to intercept before Zotero/PDF.js handlers
-      // Listen on both PDF iframe doc and reader window for better coverage
-      this.trackEventListener(
-        state,
-        doc,
-        "keydown",
-        keydownHandler as EventListener,
-        true,
-      );
-      if (wrappedReaderWin && wrappedReaderWin.document) {
-        this.trackEventListener(
-          state,
-          wrappedReaderWin.document,
-          "keydown",
-          keydownHandler as EventListener,
-          true,
-        );
-      }
-
-      const keyupHandler = (e: KeyboardEvent) => {
-        const s = self.stateMap.get(tabID);
-        if (e.key === "Control" && s) {
-          s.ctrlPressed = false;
-          self.sync.initSyncState(tabID);
-        }
-      };
-      this.trackEventListener(
-        state,
-        doc,
-        "keyup",
-        keyupHandler as EventListener,
-      );
-
-      const blurHandler = () => {
-        const s = self.stateMap.get(tabID);
-        if (s) {
-          s.ctrlPressed = false;
-          self.sync.initSyncState(tabID);
-        }
-      };
-      this.trackEventListener(
-        state,
-        wrappedWin,
-        "blur",
-        blurHandler as EventListener,
-      );
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  /**
-   * Set up resize listener to pause scroll sync during window resize
-   * This prevents false scroll sync when context pane expands/collapses
-   */
-  private static setupResizeListener(tabID: string, win: Window) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const resizeHandler = () => {
-      const s = self.stateMap.get(tabID);
-      if (!s) return;
-
-      // Pause sync during resize
-      s.syncPaused = true;
-
-      // Clear any existing timer
-      if (s.resizeTimerId !== null) {
-        win.clearTimeout(s.resizeTimerId);
-      }
-
-      // Resume sync after resize settles and reinitialize sync state
-      s.resizeTimerId = win.setTimeout(() => {
-        const s2 = self.stateMap.get(tabID);
-        if (s2) {
-          // Reinitialize sync state with new positions after resize
-          self.sync.initSyncState(tabID);
-          s2.syncPaused = false;
-          s2.resizeTimerId = null;
-        }
-      }, 200);
-    };
-
-    this.trackEventListener(
-      state,
-      win,
-      "resize",
-      resizeHandler as EventListener,
-    );
-  }
-
-  /**
-   * Set up main window keyboard listener for Ctrl+=/- zoom sync
-   * This catches keyboard events at the top level before they're consumed
-   */
-  private static setupMainWindowKeyboardListener(tabID: string, win: Window) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const keydownHandler = (e: KeyboardEvent) => {
-      const s = self.stateMap.get(tabID);
-      if (!s) return;
-      if (!e.ctrlKey || e.altKey || e.metaKey) return;
-
-      // Check if zoom key (support both Ctrl+=/- and Ctrl+Shift+=/-)
-      // With Shift: key is "+" or "_"
-      // Without Shift: key is "=" or "-"
-      const isZoomIn =
-        e.key === "+" ||
-        e.key === "=" ||
-        e.code === "Equal" ||
-        e.code === "NumpadAdd";
-      const isZoomOut =
-        e.key === "-" ||
-        e.key === "_" ||
-        e.code === "Minus" ||
-        e.code === "NumpadSubtract";
-
-      if (!isZoomIn && !isZoomOut) return;
-
-      // Determine which browser has focus to check if it's primary
-      const activeElement = win.document.activeElement;
-      const leftBrowserFocused =
-        s.leftBrowser.contains(activeElement) ||
-        s.leftBrowser === activeElement;
-      const rightBrowserFocused =
-        s.rightBrowser.contains(activeElement) ||
-        s.rightBrowser === activeElement;
-
-      // If neither browser is focused, use activeSide
-      let isLeft: boolean;
-      if (leftBrowserFocused) {
-        isLeft = true;
-      } else if (rightBrowserFocused) {
-        isLeft = false;
-      } else {
-        isLeft = s.activeSide === "left";
-      }
-
-      const primarySide = self.getEffectivePrimarySide(s);
-      if (!primarySide) return;
-      const isPrimary =
-        (isLeft && primarySide === "left") ||
-        (!isLeft && primarySide === "right");
-      if (!isPrimary) return;
-
-      // Sync zoom to secondary
-      if (isZoomIn) {
-        self.sync.handleKeyboardZoom(tabID, isLeft, "in");
-      } else if (isZoomOut) {
-        self.sync.handleKeyboardZoom(tabID, isLeft, "out");
-      }
-    };
-
-    // Use capture phase at main window level
-    this.trackEventListener(
-      state,
-      win,
-      "keydown",
-      keydownHandler as EventListener,
-      true,
-    );
-  }
-
-  /**
-   * Activate one side of the split view and run all related side effects.
-   *
-   * "Activation" is intentionally shared by click and focus interactions.
-   * Context-menu opens also activate the side, but that activation is deferred
-   * until after the menu is shown to avoid interfering with Zotero's own
-   * synchronous reader event handlers.
-   */
-  private static activateSide(
-    tabID: string,
-    side: "left" | "right",
-    win: Window,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-    const shouldPromotePrimary =
-      getPref("followFocusPrimary") &&
-      state.primarySide !== null &&
-      state.primarySide !== side;
-    if (state.activeSide === side && !shouldPromotePrimary) return;
-
-    state.activeSide = side;
-
-    // Auto-switch primary when followFocusPrimary preference is enabled.
-    // Directly set state to avoid notification popup from setPrimarySide().
-    if (shouldPromotePrimary) {
-      state.primarySide = side;
-      this.sync.stopSyncPolling(tabID);
-      this.sync.initSyncState(tabID);
-      this.sync.startSyncPolling(tabID);
-    }
-
-    // Update scrollbar colors to reflect active/primary side
-    this.updateScrollbarColors(tabID);
-
-    // Skip context pane update when both sides belong to the same Zotero item
-    if (state.leftParentItemID === state.rightParentItemID) return;
-
-    const parentItemID =
-      side === "left" ? state.leftParentItemID : state.rightParentItemID;
-    splitContextPane.updateItem(tabID, win, parentItemID);
-  }
-
-  /**
-   * Set up focus/click listeners for a single browser to handle context pane switching.
-   * Reusable for both initial setup and secondary PDF replacement.
-   * Includes all guard conditions to prevent redundant "Section item data changed" events.
-   */
-  private static setupBrowserFocusListeners(
-    tabID: string,
-    browser: XULBrowserElement,
-    side: "left" | "right",
-    win: Window,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    // IMPORTANT: Wrap handlers in setTimeout to run asynchronously.
-    // Zotero's internal reader handlers (mouse events, etc.) may be running synchronously,
-    // and accessing certain properties or layout immediately after can cause errors
-    // like "Uncaught TypeError: can't access property 'rects', pointPosition is null".
-    // By yielding to the event loop, we ensure Zotero's internal logic completes first.
-    const scheduleActivation = () =>
-      win.setTimeout(() => {
-        self.activateSide(tabID, side, win);
-      }, 0);
-    const clickHandler = () => scheduleActivation();
-    const focusHandler = () => scheduleActivation();
-    this.trackEventListener(
-      state,
-      browser,
-      "click",
-      clickHandler as EventListener,
-      true,
-    );
-    this.trackEventListener(
-      state,
-      browser,
-      "focus",
-      focusHandler as EventListener,
-      true,
-    );
-  }
-
-  /**
-   * Set up focus listeners for context pane switching (both browsers).
-   * Delegates to setupBrowserFocusListeners for each side.
-   */
-  private static setupFocusListeners(
-    tabID: string,
-    leftBrowser: XULBrowserElement,
-    rightBrowser: XULBrowserElement,
-    win: Window,
-  ) {
-    this.setupBrowserFocusListeners(tabID, leftBrowser, "left", win);
-    this.setupBrowserFocusListeners(tabID, rightBrowser, "right", win);
   }
 
   /**
