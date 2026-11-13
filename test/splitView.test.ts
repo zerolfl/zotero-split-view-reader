@@ -175,10 +175,11 @@ describe("split reader integration", function () {
       return document.getElementById("split-view-scrollbar-style");
     };
 
-    assert.ok(getScrollbarStyle(state.leftBrowser));
+    await waitFor(() => !!getScrollbarStyle(state.leftBrowser));
     assert.isNull(getScrollbarStyle(state.rightBrowser));
     factory.setPrimarySide(state.tabID, "right");
     assert.isNull(getScrollbarStyle(state.leftBrowser));
+    await waitFor(() => !!getScrollbarStyle(state.rightBrowser));
     assert.ok(getScrollbarStyle(state.rightBrowser));
     factory.setPrimarySide(state.tabID, null);
     assert.isNull(getScrollbarStyle(state.leftBrowser));
@@ -444,6 +445,28 @@ describe("split reader integration", function () {
       readerView.getImmediateViewStateFromReader(keptReader).scale,
       125,
     );
+  });
+
+  it("replaces one reader with the selected PDF and rebinds same-PDF state", async function () {
+    const state = await open(false);
+    const originalLeftBrowser = state.leftBrowser;
+    const originalRightBrowser = state.rightBrowser;
+    const selector = factory.pdfSelector;
+    const originalSelect = selector.select;
+    try {
+      selector.select = async () => left;
+      await factory.selectAndLoadPDF(state.tabID, "right");
+    } finally {
+      selector.select = originalSelect;
+    }
+
+    assert.strictEqual(state.leftBrowser, originalLeftBrowser);
+    assert.notStrictEqual(state.rightBrowser, originalRightBrowser);
+    assert.equal(state.leftItemID, left.id);
+    assert.equal(state.rightItemID, left.id);
+    assert.isTrue(state.isSamePDF);
+    assert.ok(readerRuntime.getInternalReaderFromBrowser(state.rightBrowser));
+    assert.ok(state.disposeAnnotations);
   });
 
   it("separates different PDFs into their existing reader tabs with each position", async function () {

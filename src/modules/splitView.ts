@@ -25,6 +25,7 @@ import { SplitLibraryFlow } from "./splitView/libraryFlow";
 import { SeparateViewTargets } from "./splitView/separateViewTargets";
 import { SplitViewLifecycle } from "./splitView/lifecycle";
 import { PDFSwapService } from "./splitView/pdfSwap";
+import { PDFReplacementService } from "./splitView/pdfReplacement";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -163,6 +164,30 @@ export class SplitViewFactory {
     scheduleSyncRestart: (tabID, state) =>
       this.scheduleSyncRestart(tabID, state),
     showSwapped: () => this.showSplitViewSwappedMessage(),
+    debug: (message) => Zotero.debug(message),
+  });
+  private static pdfReplacement = new PDFReplacementService({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
+    getStoredViewState: (item) => attachmentState.getStoredViewState(item),
+    replaceBrowser: (tabID, side) => this.replaceBrowser(tabID, side),
+    getMainWindow: () => Zotero.getMainWindow(),
+    initializeReader: (...args) => this.initializeReader(...args),
+    setupBrowserFocusListeners: (...args) =>
+      this.setupBrowserFocusListeners(...args),
+    setupCtrlKeyListener: (...args) => this.setupCtrlKeyListener(...args),
+    setupZoomButtonListeners: (tabID, browser) =>
+      this.sync.setupZoomButtonListeners(tabID, browser),
+    stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
+    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    bindAnnotations: (state) => bindSplitAnnotations(state),
+    updateSession: (tabID) => this.updateTabDataForSession(tabID),
+    renameTab: (tabID) => this.tabTitles.renameTab(tabID),
+    scheduleSyncRestart: (tabID, state) =>
+      this.scheduleSyncRestart(tabID, state),
+    showLoaded: () => this.showSplitViewLoadMessage(true),
+    showFailure: () => this.showSplitViewLoadMessage(false),
     debug: (message) => Zotero.debug(message),
   });
   private static pdfSelector = new PDFSelector();
@@ -843,144 +868,7 @@ export class SplitViewFactory {
     tabID: string,
     targetSide: "left" | "right",
   ) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-
-    // Get the current item ID for the target side
-    const currentItemID =
-      targetSide === "left" ? state.leftItemID : state.rightItemID;
-    const currentItem = Zotero.Items.get(currentItemID);
-    if (!currentItem) return;
-
-    // Show PDF selection dialog
-    const selectedPDF = await this.pdfSelector.select(currentItem.libraryID);
-    if (!selectedPDF) return;
-
-    // Check if the selected PDF is the same as the currently loaded one
-    if (selectedPDF.id === currentItemID) {
-      // Same PDF - no need to reload
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-loaded"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(2000);
-      return;
-    }
-
-    // Load the new PDF in the target side
-    try {
-      // Stop sync polling during reload
-      const hadPrimary = !!state.primarySide;
-      if (hadPrimary) {
-        this.sync.stopSyncPolling(tabID);
-      }
-
-      // Get the view state for the new PDF
-      const newViewState =
-        await attachmentState.getStoredViewState(selectedPDF);
-
-      // Get the appropriate popupset
-      const popupset =
-        targetSide === "left" ? state.leftPopupset : state.rightPopupset;
-
-      // Replace the browser element to ensure a fresh state
-      // This avoids race conditions with waitForBrowserLoad on reused browsers
-      const newBrowser = await this.replaceBrowser(tabID, targetSide);
-      if (!newBrowser) {
-        throw new Error("Failed to replace browser element");
-      }
-
-      // Reload the browser with the new PDF
-      const win = Zotero.getMainWindow();
-      await this.initializeReader(
-        tabID,
-        newBrowser,
-        selectedPDF,
-        popupset,
-        newViewState,
-        targetSide === "right", // isRight parameter
-      );
-
-      // Setup listeners for the new browser
-      // Use the shared focus listener method with all proper guards
-      // to prevent redundant "Section item data changed" events
-      this.setupBrowserFocusListeners(tabID, newBrowser, targetSide, win);
-      this.setupCtrlKeyListener(tabID, newBrowser);
-      this.sync.setupZoomButtonListeners(tabID, newBrowser);
-
-      // Update state with new item ID
-      if (targetSide === "left") {
-        state.leftItemID = selectedPDF.id;
-        state.leftParentItemID = selectedPDF.parentItemID || selectedPDF.id;
-      } else {
-        state.rightItemID = selectedPDF.id;
-        state.rightParentItemID = selectedPDF.parentItemID || selectedPDF.id;
-      }
-
-      // Update isSamePDF flag
-      state.isSamePDF = state.leftItemID === state.rightItemID;
-
-      // Setup annotation sync if we are now viewing the same PDF
-      if (state.isSamePDF) {
-        bindSplitAnnotations(state);
-      }
-
-      // Preserve the existing primary side when replacing a PDF in one view.
-      // "Change PDF in This View" should not implicitly transfer primary control.
-      this.updateScrollbarColors(tabID);
-
-      // Update tab data
-      this.updateTabDataForSession(tabID);
-
-      await this.tabTitles.renameTab(tabID);
-
-      // Restart sync if a primary view is active
-      if (hadPrimary) {
-        this.trackTimeout(
-          state,
-          () => {
-            const s = this.stateMap.get(tabID);
-            if (s && s.primarySide) {
-              this.sync.cacheViewerContainers(tabID);
-              this.sync.initSyncState(tabID);
-              this.sync.startSyncPolling(tabID);
-            }
-          },
-          500,
-        );
-      }
-
-      // Show success notification
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-loaded"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(2000);
-    } catch (e) {
-      Zotero.debug(`Split view: Error loading PDF on ${targetSide} side: ${e}`);
-
-      // Show error notification
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-not-found"),
-          type: "error",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(2000);
-    }
+    await this.pdfReplacement.selectAndLoad(tabID, targetSide);
   }
 
   /**
@@ -2310,6 +2198,19 @@ export class SplitViewFactory {
       .createLine({
         text: getString("splitview-closed"),
         type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
+      })
+      .show();
+    popup.startCloseTimer(2000);
+  }
+
+  private static showSplitViewLoadMessage(loaded: boolean) {
+    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+      closeOnClick: true,
+    })
+      .createLine({
+        text: getString(loaded ? "splitview-loaded" : "splitview-not-found"),
+        type: loaded ? "default" : "error",
         icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
       })
       .show();
