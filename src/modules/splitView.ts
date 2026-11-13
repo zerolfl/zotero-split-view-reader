@@ -92,6 +92,7 @@ export class SplitViewFactory {
     removeState: (tabID) => this.stateMap.delete(tabID),
     hasState: (tabID) => this.stateMap.has(tabID),
     hasAnyState: () => this.stateMap.size > 0,
+    saveState: (state) => this.tabNotifier.save(state),
     pauseReader: (browser) =>
       this.readAloudCoordinator.pauseBrowser(browser, true),
     setAudioStatus: (tabID) =>
@@ -788,19 +789,7 @@ export class SplitViewFactory {
    * Clean up a specific tab's split view (with state save)
    */
   private static cleanupTab(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    // Prevent re-entry and dead object access
-    if (state.isCleaningUp) return;
-    state.isCleaningUp = true;
-
-    this.tabNotifier.save(state);
-
-    // Reset isCleaningUp so cleanupTabResources can process it
-    state.isCleaningUp = false;
-
-    this.cleanupTabResources(tabID);
+    this.tabCleanup.cleanupAndSave(tabID);
   }
 
   /**

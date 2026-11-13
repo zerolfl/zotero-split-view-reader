@@ -10,6 +10,7 @@ function setup({
   failTimers = false,
 } = {}) {
   const events = [];
+  const stateChecks = [];
   const state = {
     leftBrowser: "left-browser",
     rightBrowser: "right-browser",
@@ -41,13 +42,18 @@ function setup({
     },
   };
   const cleanup = new SplitTabCleanup({
-    getState: (id) => states.get(id) || null,
+    getState: (id) => {
+      const value = states.get(id) || null;
+      if (id === "split") stateChecks.push(value?.isCleaningUp);
+      return value;
+    },
     removeState: (id) => {
       events.push(["remove-state", id]);
       states.delete(id);
     },
     hasState: (id) => states.has(id),
     hasAnyState: () => states.size > 0,
+    saveState: (value) => events.push(["save-state", value.isCleaningUp]),
     pauseReader: (browser) => events.push(["pause", browser]),
     setAudioStatus: (id) => events.push(["audio-off", id]),
     unloadBrowser: (browser) => events.push(["unload", browser]),
@@ -58,7 +64,7 @@ function setup({
     unregisterTabNotifier: () => events.push(["unregister-notifier"]),
     debug: (message) => events.push(["debug", message]),
   });
-  return { cleanup, events, state, states };
+  return { cleanup, events, state, stateChecks, states };
 }
 
 test("unloads readers before clearing tracked resources and stops sync first", () => {
@@ -130,4 +136,30 @@ test("continues cleanup when individual listener or timer releases fail", () => 
 
   assert.equal(fixture.events.filter(([name]) => name === "debug").length, 7);
   assert.ok(fixture.events.some(([name]) => name === "unregister-notifier"));
+});
+
+test("saves before cleanup and guards the save against re-entry", () => {
+  const fixture = setup();
+
+  fixture.cleanup.cleanupAndSave("split");
+
+  assert.deepEqual(fixture.events[0], ["save-state", true]);
+  assert.deepEqual(fixture.stateChecks, [false, false]);
+  assert.ok(
+    fixture.events.findIndex(([name]) => name === "save-state") <
+      fixture.events.findIndex(([name]) => name === "unload"),
+  );
+  assert.equal(fixture.state.isCleaningUp, true);
+  assert.equal(fixture.states.has("split"), false);
+});
+
+test("skips save and cleanup for missing or already-cleaning state", () => {
+  const fixture = setup();
+
+  fixture.cleanup.cleanupAndSave("missing");
+  fixture.state.isCleaningUp = true;
+  fixture.cleanup.cleanupAndSave("split");
+
+  assert.deepEqual(fixture.events, []);
+  assert.equal(fixture.states.has("split"), true);
 });

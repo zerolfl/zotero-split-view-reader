@@ -5,6 +5,7 @@ export interface SplitTabCleanupDependencies {
   removeState(tabID: string): void;
   hasState(tabID: string): boolean;
   hasAnyState(): boolean;
+  saveState(state: SplitTabState): void;
   pauseReader(browser: XULBrowserElement): void;
   setAudioStatus(tabID: string): void;
   unloadBrowser(browser: XULBrowserElement): void;
@@ -18,6 +19,16 @@ export interface SplitTabCleanupDependencies {
 
 export class SplitTabCleanup {
   constructor(private readonly deps: SplitTabCleanupDependencies) {}
+
+  cleanupAndSave(tabID: string): void {
+    const state = this.deps.getState(tabID);
+    if (!state || state.isCleaningUp) return;
+
+    state.isCleaningUp = true;
+    this.deps.saveState(state);
+    state.isCleaningUp = false;
+    this.cleanup(tabID);
+  }
 
   cleanup(tabID: string): void {
     const state = this.deps.getState(tabID);
