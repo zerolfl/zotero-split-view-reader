@@ -45,6 +45,7 @@ import { SplitSessionRestore } from "./splitView/sessionRestore";
 import { SplitReaderInitialization } from "./splitView/readerInitialization";
 import { SplitViewNotifications } from "./splitView/notifications";
 import { SplitReaderToolbar } from "./splitView/readerToolbar";
+import { SplitViewDelayedSetup } from "./splitView/delayedSetup";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -265,6 +266,24 @@ export class SplitViewFactory {
     unregisterObserver: (id) => Zotero.Prefs.unregisterObserver(id),
     debug: (message) => Zotero.debug(message),
   });
+  private static delayedSetup = new SplitViewDelayedSetup({
+    getState: (tabID) => this.stateMap.get(tabID),
+    trackTimeout: (...args) => this.resourceTracker.trackTimeout(...args),
+    setupResizeListener: (tabID, win) =>
+      this.interactions.setupResizeListener(tabID, win),
+    setupCtrlKeyListener: (tabID, browser) =>
+      this.interactions.setupCtrlKeyListener(tabID, browser),
+    setupMainWindowKeyboardListener: (tabID, win) =>
+      this.interactions.setupMainWindowKeyboardListener(tabID, win),
+    setupZoomButtonListeners: (tabID, browser) =>
+      this.sync.setupZoomButtonListeners(tabID, browser),
+    setupContextPaneObserver: (tabID, win) =>
+      this.interactions.setupContextPaneObserver(tabID, win),
+    cacheViewerContainers: (tabID) => this.sync.cacheViewerContainers(tabID),
+    initSyncState: (tabID) => this.sync.initSyncState(tabID),
+    startSyncPolling: (tabID) => this.sync.startSyncPolling(tabID),
+    updateScrollbar: (tabID) => this.splitScrollbar.update(tabID),
+  });
   private static readerHost = new SplitReaderHost();
   private static readerToolbar = new SplitReaderToolbar({
     getState: (tabID) => this.stateMap.get(tabID) || null,
@@ -354,28 +373,7 @@ export class SplitViewFactory {
     setupFocusListeners: (...args) =>
       this.interactions.setupFocusListeners(...args),
     bindAnnotations: (state) => bindSplitAnnotations(state),
-    scheduleDelayedSetup: (tabID, state, win, leftBrowser, rightBrowser) =>
-      this.resourceTracker.trackTimeout(
-        state,
-        () => {
-          const current = this.stateMap.get(tabID);
-          if (!current) return;
-          this.interactions.setupResizeListener(tabID, win);
-          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
-          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
-          this.interactions.setupMainWindowKeyboardListener(tabID, win);
-          this.sync.setupZoomButtonListeners(tabID, leftBrowser);
-          this.sync.setupZoomButtonListeners(tabID, rightBrowser);
-          this.interactions.setupContextPaneObserver(tabID, win);
-          if (current.primarySide) {
-            this.sync.cacheViewerContainers(tabID);
-            this.sync.initSyncState(tabID);
-            this.sync.startSyncPolling(tabID);
-          }
-          this.splitScrollbar.update(tabID);
-        },
-        500,
-      ),
+    scheduleDelayedSetup: (...args) => this.delayedSetup.schedule(...args),
     writeSession: (state) => this.session.write(state),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     cleanup: (tabID) => this.cleanupTab(tabID),
