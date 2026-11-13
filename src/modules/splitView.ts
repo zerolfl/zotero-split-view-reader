@@ -31,6 +31,7 @@ import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
+import { SplitViewConversionService } from "./splitView/conversion";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
@@ -361,6 +362,17 @@ export class SplitViewFactory {
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     cleanup: (tabID) => this.cleanupTab(tabID),
   });
+  private static conversion = new SplitViewConversionService({
+    getMainWindow: () => Zotero.getMainWindow(),
+    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    getContainer: (win, tabID) => win.document.getElementById(tabID),
+    getViewState: (reader) => readerView.getViewStateFromReader(reader),
+    getStoredViewState: (item) => attachmentState.getStoredViewState(item),
+    closeReader: (reader) => readerRuntime.closeReaderWithoutClosingTab(reader),
+    createShell: (...args) => this.splitReaderTab.create(...args),
+    createAndInitialize: (options) =>
+      this.creation.createAndInitialize(options),
+  });
   private static readerPopupMenu = new SplitReaderPopupMenu({
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
     getMainWindow: () => Zotero.getMainWindow(),
@@ -451,9 +463,9 @@ export class SplitViewFactory {
     itemExists: (itemID) => Zotero.Items.exists(itemID),
     getItem: (itemID) => Zotero.Items.get(itemID) || null,
     convertSamePDF: (reader, data) =>
-      this.convertToSamePDFSplitView(reader, data),
+      this.conversion.convertSamePDF(reader, data),
     convertDifferentPDF: (reader, item, data) =>
-      this.convertToSplitView(reader, item, data),
+      this.conversion.convertDifferentPDF(reader, item, data),
     getState: (tabID) => this.stateMap.get(tabID) || null,
     updateBrowserFlex: (state, ratio) =>
       this.layout.updateBrowserFlex(
@@ -486,8 +498,9 @@ export class SplitViewFactory {
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
     waitForReaderReady: (reader) => readerRuntime.waitForReaderReady(reader),
     hasSplitState: (tabID) => this.stateMap.has(tabID),
-    splitSamePDF: (reader) => this.convertToSamePDFSplitView(reader),
-    splitDifferentPDF: (reader, item) => this.convertToSplitView(reader, item),
+    splitSamePDF: (reader) => this.conversion.convertSamePDF(reader),
+    splitDifferentPDF: (reader, item) =>
+      this.conversion.convertDifferentPDF(reader, item),
   });
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
@@ -756,113 +769,15 @@ export class SplitViewFactory {
       const selectedPDF = await this.pdfSelector.select(currentItem.libraryID);
       if (!selectedPDF) return;
 
-      // Check if same PDF
-      const isSamePDF = selectedPDF.id === reader.itemID;
-
-      if (isSamePDF) {
-        // Same file: use dual browser with annotation sync
-        await this.convertToSamePDFSplitView(reader);
-      } else {
-        // Different files: use existing dual browser approach
-        await this.convertToSplitView(reader, selectedPDF);
-      }
+      if (selectedPDF.id === reader.itemID)
+        await this.conversion.convertSamePDF(reader);
+      else await this.conversion.convertDifferentPDF(reader, selectedPDF);
     } catch {
       const s = this.stateMap.get(tabID);
       if (s && !s.isCleaningUp) {
         this.cleanupTab(tabID);
       }
     }
-  }
-
-  /**
-   * Convert current reader tab to split view
-   * Keeps the current PDF on the left side and adds the secondary PDF on the right
-   */
-  private static async convertToSplitView(
-    currentReader: any,
-    secondaryPDF: Zotero.Item,
-    restored?: { leftViewState?: any; rightViewState?: any },
-  ) {
-    const win = Zotero.getMainWindow();
-
-    // 1. Get current tab and reader info
-    const tabID = currentReader.tabID;
-    const leftItemID = currentReader.itemID;
-    const leftItem = Zotero.Items.get(leftItemID);
-    if (!leftItem) throw new Error(`Attachment ${leftItemID} is unavailable`);
-    const container = win.document.getElementById(tabID);
-
-    if (!container) {
-      throw new Error("Tab container not found");
-    }
-
-    // 2. Save current reader's viewState (position info)
-    const leftViewState =
-      restored?.leftViewState ??
-      (await readerView.getViewStateFromReader(currentReader));
-
-    // 3. Get right PDF's stored state
-    const rightViewState =
-      restored?.rightViewState ??
-      (await attachmentState.getStoredViewState(secondaryPDF));
-
-    // 4. Close current reader (but don't close tab)
-    await readerRuntime.closeReaderWithoutClosingTab(currentReader);
-
-    const shell = this.splitReaderTab.create(win, tabID, container);
-    await this.creation.createAndInitialize({
-      win,
-      tabID,
-      shell,
-      leftItem,
-      rightItem: secondaryPDF,
-      leftViewState,
-      rightViewState,
-      isSamePDF: false,
-    });
-  }
-
-  /**
-   * Convert current reader tab to split view with the same PDF
-   * Both sides show the same PDF with annotation synchronization
-   */
-  private static async convertToSamePDFSplitView(
-    currentReader: any,
-    restored?: { leftViewState?: any; rightViewState?: any },
-  ) {
-    const win = Zotero.getMainWindow();
-
-    // 1. Get current tab and reader info
-    const tabID = currentReader.tabID;
-    const itemID = currentReader.itemID;
-    const item = Zotero.Items.get(itemID);
-    if (!item) throw new Error(`Attachment ${itemID} is unavailable`);
-    const container = win.document.getElementById(tabID);
-
-    if (!container) {
-      throw new Error("Tab container not found");
-    }
-
-    // 2. Save current reader's viewState (position info)
-    const leftViewState =
-      restored?.leftViewState ??
-      (await readerView.getViewStateFromReader(currentReader));
-    const rightViewState = restored?.rightViewState ?? leftViewState;
-
-    // 3. Close current reader (but don't close tab)
-    await readerRuntime.closeReaderWithoutClosingTab(currentReader);
-
-    const shell = this.splitReaderTab.create(win, tabID, container);
-    await this.creation.createAndInitialize({
-      win,
-      tabID,
-      shell,
-      leftItem: item,
-      rightItem: item,
-      leftViewState,
-      rightViewState,
-      isSamePDF: true,
-    });
   }
 
   /**
