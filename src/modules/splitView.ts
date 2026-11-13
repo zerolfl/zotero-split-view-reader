@@ -44,6 +44,7 @@ import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { SplitSessionRestore } from "./splitView/sessionRestore";
 import { SplitReaderInitialization } from "./splitView/readerInitialization";
 import { SplitViewNotifications } from "./splitView/notifications";
+import { SplitReaderToolbar } from "./splitView/readerToolbar";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -265,6 +266,14 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static readerHost = new SplitReaderHost();
+  private static readerToolbar = new SplitReaderToolbar({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
+    hasActiveSplitState: (tabID) => this.hasActiveSplitState(tabID),
+    getCloseLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
+    closeSide: (tabID, side) => void this.revertToSingleReader(tabID, side),
+    installButton: (browser, options) => installCloseButton(browser, options),
+  });
   private static readerInitialization = new SplitReaderInitialization(
     this.readerHost,
     {
@@ -304,7 +313,7 @@ export class SplitViewFactory {
         }, 50);
       },
       afterReady: (tabID, browser, side) => {
-        this.installToolbarCloseButton(tabID, browser, side);
+        this.readerToolbar.installCloseButton(tabID, browser, side);
         if (side === "left") splitContextPane.hideReaderSidenav(browser);
         else splitContextPane.injectReaderHandler(browser);
         this.splitScrollbar.update(tabID);
@@ -549,13 +558,6 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
-  /**
-   * Look up state for a specific tab
-   */
-  private static getState(tabID: string): SplitTabState | null {
-    return this.stateMap.get(tabID) ?? null;
-  }
-
   private static hasActiveSplitState(
     tabID: string | null | undefined,
   ): boolean {
@@ -585,23 +587,6 @@ export class SplitViewFactory {
     if (typeof pane?.selectItem === "function") {
       void pane.selectItem(targetItemID);
     }
-  }
-
-  /**
-   * Get the state for the currently selected Zotero tab (if it has split view)
-   */
-  private static getActiveTabState(): SplitTabState | null {
-    try {
-      const win = Zotero.getMainWindow();
-      const Zotero_Tabs = tabsForWindow(win);
-      const selectedTabID = Zotero_Tabs?.selectedID;
-      if (selectedTabID) {
-        return this.stateMap.get(selectedTabID) ?? null;
-      }
-    } catch {
-      // Ignore errors
-    }
-    return null;
   }
 
   static refreshOpenSplitViewTabTitles(): void {
@@ -757,39 +742,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Add a close button to the reader toolbar for this split-view side.
-   */
-  private static installToolbarCloseButton(
-    tabID: string,
-    browser: XULBrowserElement,
-    side: "left" | "right",
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp || !readerRuntime.isBrowserAlive(browser))
-      return;
-
-    state.toolbarCloseObservers = state.toolbarCloseObservers.filter(
-      (entry) => {
-        if (entry.side !== side) return true;
-        try {
-          entry.observer.disconnect();
-        } catch {
-          // Ignore observers from an already-unloaded browser
-        }
-        return false;
-      },
-    );
-
-    const observer = installCloseButton(browser, {
-      side,
-      label: this.menuPresentation.getCloseViewMenuLabel(),
-      isActive: () => this.hasActiveSplitState(tabID),
-      onClose: () => void this.revertToSingleReader(tabID, side),
-    });
-    if (observer) state.toolbarCloseObservers.push({ side, observer });
-  }
-
-  /**
    * Open context menu for a reader
    */
   private static openContextMenu(
@@ -860,7 +812,6 @@ export class SplitViewFactory {
     const state = this.stateMap.get(tabID);
     if (!state) return;
 
-    // Cleanup state first
     this.cleanupTab(tabID);
 
     try {
