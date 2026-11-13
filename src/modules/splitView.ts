@@ -28,9 +28,9 @@ import { PDFSwapService } from "./splitView/pdfSwap";
 import { PDFReplacementService } from "./splitView/pdfReplacement";
 import { SplitReaderBrowserAdapter } from "../platform/splitReaderBrowser";
 import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
-import { createSplitTabState } from "./splitView/state";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { SplitInteractions } from "./splitView/interactions";
+import { SplitViewCreationService } from "./splitView/creation";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -169,6 +169,66 @@ export class SplitViewFactory {
     updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
   });
   private static readerHost = new SplitReaderHost();
+  private static creation = new SplitViewCreationService({
+    getDefaultPrimarySide: () => this.getDefaultPrimarySide(),
+    getOriginalTitle: (tabID) => {
+      try {
+        return tabsForWindow(Zotero.getMainWindow()).lookup(tabID).tab?.title;
+      } catch {
+        return undefined;
+      }
+    },
+    setState: (tabID, state) => this.stateMap.set(tabID, state),
+    setupShell: (tabID, state, shell, win) => {
+      this.layout.setupResizerDrag(
+        tabID,
+        shell.resizer,
+        shell.leftBrowser,
+        shell.rightBrowser,
+        shell.mainHbox,
+        win,
+      );
+      this.layout.updateBrowserFlex(
+        shell.leftBrowser,
+        shell.rightBrowser,
+        state.splitRatio,
+      );
+      this.ensureGlobalTabNotifier(win);
+      this.setupContextPane(tabID, win);
+    },
+    initializeReader: (...args) => this.initializeReader(...args),
+    showLoaded: (isSamePDF) => this.showCreatedSplitViewMessage(isSamePDF),
+    updateContextPane: (tabID, win, itemID) =>
+      splitContextPane.updateItem(tabID, win, itemID),
+    setupFocusListeners: (...args) =>
+      this.interactions.setupFocusListeners(...args),
+    bindAnnotations: (state) => bindSplitAnnotations(state),
+    scheduleDelayedSetup: (tabID, state, win, leftBrowser, rightBrowser) =>
+      this.trackTimeout(
+        state,
+        () => {
+          const current = this.stateMap.get(tabID);
+          if (!current) return;
+          this.interactions.setupResizeListener(tabID, win);
+          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
+          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
+          this.interactions.setupMainWindowKeyboardListener(tabID, win);
+          this.sync.setupZoomButtonListeners(tabID, leftBrowser);
+          this.sync.setupZoomButtonListeners(tabID, rightBrowser);
+          this.interactions.setupContextPaneObserver(tabID, win);
+          if (current.primarySide) {
+            this.sync.cacheViewerContainers(tabID);
+            this.sync.initSyncState(tabID);
+            this.sync.startSyncPolling(tabID);
+          }
+          this.updateScrollbarColors(tabID);
+        },
+        500,
+      ),
+    writeSession: (state) => this.session.write(state),
+    renameTab: (tabID) => this.tabTitles.renameTab(tabID),
+    cleanup: (tabID) => this.cleanupTab(tabID),
+  });
   private static pdfSwap = new PDFSwapService({
     getState: (tabID) => this.stateMap.get(tabID) || null,
     captureViewState: (browser) =>
@@ -645,7 +705,6 @@ export class SplitViewFactory {
     savedData: any,
   ) {
     const win = Zotero.getMainWindow();
-    const Zotero_Tabs = tabsForWindow(win);
 
     // Get the reader that was just loaded
     const reader = Zotero.Reader.getByTabID(tabID);
@@ -875,7 +934,6 @@ export class SplitViewFactory {
     restored?: { leftViewState?: any; rightViewState?: any },
   ) {
     const win = Zotero.getMainWindow();
-    const Zotero_Tabs = tabsForWindow(win);
 
     // 1. Get current tab and reader info
     const tabID = currentReader.tabID;
@@ -901,153 +959,17 @@ export class SplitViewFactory {
     // 4. Close current reader (but don't close tab)
     await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
-    const {
-      container: newContainer,
-      mainHbox,
-      leftBrowser,
-      rightBrowser,
-      resizer,
-      leftPopupset,
-      rightPopupset,
-      eventListeners,
-    } = this.splitReaderTab.create(win, tabID, container);
-
-    // Get parent item IDs for context pane switching
-    const leftParentItemID = leftItem.parentItemID || leftItem.id;
-    const rightParentItemID = secondaryPDF.parentItemID || secondaryPDF.id;
-
-    // 8. Initialize state and store in map (reuse current tabID)
-    //    Capture original tab title before we rename it, for possible future use.
-    let originalTitle: string | undefined;
-    try {
-      const { tab } = Zotero_Tabs.lookup(tabID);
-      originalTitle = tab?.title;
-    } catch {
-      originalTitle = undefined;
-    }
-
-    const newState = createSplitTabState({
-      tabID,
-      container: newContainer as unknown as XUL.Box,
-      leftBrowser,
-      rightBrowser,
-      leftPopupset,
-      rightPopupset,
-      leftItemID,
-      rightItemID: secondaryPDF.id,
-      leftParentItemID,
-      rightParentItemID,
-      primarySide: this.getDefaultPrimarySide(),
-      eventListeners,
-      leftViewState,
-      rightViewState: rightViewState,
-      isSamePDF: false,
-      originalTitle,
-    });
-    this.stateMap.set(tabID, newState);
-
-    // Set up drag functionality
-    this.layout.setupResizerDrag(
-      tabID,
-      resizer,
-      leftBrowser,
-      rightBrowser,
-      mainHbox,
+    const shell = this.splitReaderTab.create(win, tabID, container);
+    await this.creation.createAndInitialize({
       win,
-    );
-
-    // Set initial flex values
-    this.layout.updateBrowserFlex(
-      leftBrowser,
-      rightBrowser,
-      newState.splitRatio,
-    );
-
-    // Register global tab notifier (if not already registered)
-    this.ensureGlobalTabNotifier(win);
-
-    // Set up context pane
-    this.setupContextPane(tabID, win);
-
-    // 9. Initialize both readers (with viewState)
-    try {
-      await Promise.all([
-        this.initializeReader(
-          tabID,
-          leftBrowser,
-          leftItem,
-          leftPopupset,
-          leftViewState,
-          false,
-        ),
-        this.initializeReader(
-          tabID,
-          rightBrowser,
-          secondaryPDF,
-          rightPopupset,
-          rightViewState,
-          true,
-        ),
-      ]);
-
-      // Show success notification
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-loaded"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(3000);
-
-      // Initialize context pane with left item
-      const curState = this.stateMap.get(tabID);
-      if (curState) {
-        curState.activeSide = "left";
-        splitContextPane.updateItem(tabID, win, curState.leftParentItemID);
-      }
-
-      // Set up focus listeners
-      this.interactions.setupFocusListeners(
-        tabID,
-        leftBrowser,
-        rightBrowser,
-        win,
-      );
-
-      // Finish split-view setup after both readers initialize
-      this.trackTimeout(
-        newState,
-        () => {
-          const s = this.stateMap.get(tabID);
-          if (!s) return;
-          this.interactions.setupResizeListener(tabID, win);
-          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
-          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
-          this.interactions.setupMainWindowKeyboardListener(tabID, win);
-          this.sync.setupZoomButtonListeners(tabID, leftBrowser);
-          this.sync.setupZoomButtonListeners(tabID, rightBrowser);
-          this.interactions.setupContextPaneObserver(tabID, win);
-          if (s.primarySide) {
-            this.sync.cacheViewerContainers(tabID);
-            this.sync.initSyncState(tabID);
-            this.sync.startSyncPolling(tabID);
-          }
-          // Apply scrollbar colors to indicate primary side
-          this.updateScrollbarColors(tabID);
-        },
-        500,
-      );
-
-      // 10. Update tab data and title (include split view state for session restore)
-      this.session.write(newState);
-      await this.tabTitles.renameTab(tabID);
-    } catch (e) {
-      this.cleanupTab(tabID);
-      throw e;
-    }
+      tabID,
+      shell,
+      leftItem,
+      rightItem: secondaryPDF,
+      leftViewState,
+      rightViewState,
+      isSamePDF: false,
+    });
   }
 
   /**
@@ -1059,7 +981,6 @@ export class SplitViewFactory {
     restored?: { leftViewState?: any; rightViewState?: any },
   ) {
     const win = Zotero.getMainWindow();
-    const Zotero_Tabs = tabsForWindow(win);
 
     // 1. Get current tab and reader info
     const tabID = currentReader.tabID;
@@ -1082,155 +1003,16 @@ export class SplitViewFactory {
     await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
     const shell = this.splitReaderTab.create(win, tabID, container);
-    const {
-      container: newContainer,
-      mainHbox,
-      leftBrowser,
-      rightBrowser,
-      resizer,
-      leftPopupset,
-      rightPopupset,
-      eventListeners,
-    } = shell;
-
-    // Get parent item ID for context pane
-    const parentItemID = item.parentItemID || item.id;
-
-    // 7. Initialize state and store in map
-    //    Capture original tab title before any rename, so we could restore or
-    //    inspect it in the future if needed.
-    let originalTitle: string | undefined;
-    try {
-      const { tab } = Zotero_Tabs.lookup(tabID);
-      originalTitle = tab?.title;
-    } catch {
-      originalTitle = undefined;
-    }
-
-    const newState = createSplitTabState({
+    await this.creation.createAndInitialize({
+      win,
       tabID,
-      container: newContainer as unknown as XUL.Box,
-      leftBrowser,
-      rightBrowser,
-      leftPopupset,
-      rightPopupset,
-      leftItemID: itemID,
-      rightItemID: itemID, // Same PDF
-      leftParentItemID: parentItemID,
-      rightParentItemID: parentItemID,
-      primarySide: this.getDefaultPrimarySide(),
-      eventListeners,
+      shell,
+      leftItem: item,
+      rightItem: item,
       leftViewState,
       rightViewState,
       isSamePDF: true,
-      originalTitle,
     });
-    this.stateMap.set(tabID, newState);
-
-    // Set up drag functionality
-    this.layout.setupResizerDrag(
-      tabID,
-      resizer,
-      leftBrowser,
-      rightBrowser,
-      mainHbox,
-      win,
-    );
-
-    // Set initial flex values
-    this.layout.updateBrowserFlex(
-      leftBrowser,
-      rightBrowser,
-      newState.splitRatio,
-    );
-
-    // Register global tab notifier (if not already registered)
-    this.ensureGlobalTabNotifier(win);
-
-    // Set up context pane
-    this.setupContextPane(tabID, win);
-
-    // 8. Initialize both readers with the same PDF
-    try {
-      await Promise.all([
-        this.initializeReader(
-          tabID,
-          leftBrowser,
-          item,
-          leftPopupset,
-          leftViewState,
-          false,
-        ),
-        this.initializeReader(
-          tabID,
-          rightBrowser,
-          item,
-          rightPopupset,
-          rightViewState,
-          true,
-        ),
-      ]);
-
-      // Show success notification
-      const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-      })
-        .createLine({
-          text: getString("splitview-same-pdf-loaded"),
-          type: "default",
-          icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
-        })
-        .show();
-      popup.startCloseTimer(3000);
-
-      // Initialize context pane with left item
-      const curState = this.stateMap.get(tabID);
-      if (curState) {
-        curState.activeSide = "left";
-        splitContextPane.updateItem(tabID, win, curState.leftParentItemID);
-      }
-
-      // Set up focus listeners
-      this.interactions.setupFocusListeners(
-        tabID,
-        leftBrowser,
-        rightBrowser,
-        win,
-      );
-
-      bindSplitAnnotations(newState);
-
-      // Finish split-view setup after both readers initialize
-      this.trackTimeout(
-        newState,
-        () => {
-          const s = this.stateMap.get(tabID);
-          if (!s) return;
-          this.interactions.setupResizeListener(tabID, win);
-          this.interactions.setupCtrlKeyListener(tabID, leftBrowser);
-          this.interactions.setupCtrlKeyListener(tabID, rightBrowser);
-          this.interactions.setupMainWindowKeyboardListener(tabID, win);
-          this.sync.setupZoomButtonListeners(tabID, leftBrowser);
-          this.sync.setupZoomButtonListeners(tabID, rightBrowser);
-          this.interactions.setupContextPaneObserver(tabID, win);
-          if (s.primarySide) {
-            this.sync.cacheViewerContainers(tabID);
-            this.sync.initSyncState(tabID);
-            this.sync.startSyncPolling(tabID);
-          }
-          // Apply scrollbar colors to indicate primary side
-          this.updateScrollbarColors(tabID);
-        },
-        500,
-      );
-
-      // 9. Update tab data and title for session restore.
-      this.session.write(newState);
-      await this.tabTitles.renameTab(tabID);
-    } catch (e) {
-      this.cleanupTab(tabID);
-      throw e;
-    }
   }
 
   /**
@@ -1841,6 +1623,21 @@ export class SplitViewFactory {
       })
       .show();
     popup.startCloseTimer(2000);
+  }
+
+  private static showCreatedSplitViewMessage(isSamePDF: boolean) {
+    const popup = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+      closeOnClick: true,
+    })
+      .createLine({
+        text: getString(
+          isSamePDF ? "splitview-same-pdf-loaded" : "splitview-loaded",
+        ),
+        type: "default",
+        icon: `chrome://${config.addonRef}/content/icons/svreader.svg`,
+      })
+      .show();
+    popup.startCloseTimer(3000);
   }
 
   private static showSplitViewSwappedMessage() {
