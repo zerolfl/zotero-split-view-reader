@@ -174,6 +174,50 @@ export class SplitSync {
     }
   }
 
+  handleSidebarToggle(
+    tabID: string,
+    sourceBrowser: XULBrowserElement,
+    open: boolean,
+  ): void {
+    const state = this.options.getState(tabID);
+    if (!state || state.isCleaningUp) return;
+    const primarySide = this.options.getEffectivePrimarySide(state);
+    if (!primarySide) return;
+
+    const isLeft = sourceBrowser === state.leftBrowser;
+    const isPrimary =
+      (isLeft && primarySide === "left") ||
+      (!isLeft && primarySide === "right");
+    if (!isPrimary) return;
+
+    const win = this.options.getMainWindow();
+    for (const timerID of state.sidebarToggleTimers) win.clearTimeout(timerID);
+    state.sidebarToggleTimers = [];
+    state.syncPaused = true;
+
+    const secondaryBrowser = isLeft ? state.rightBrowser : state.leftBrowser;
+    try {
+      const reader =
+        readerRuntime.getInternalReaderFromBrowser(secondaryBrowser);
+      if (typeof reader?.toggleSidebar === "function") {
+        reader.toggleSidebar(open);
+      } else if (typeof reader?._primaryView?.setSidebarOpen === "function") {
+        reader._primaryView.setSidebarOpen(open);
+      }
+    } catch {
+      // Ignore errors from an unloading reader.
+    }
+
+    const timerID = win.setTimeout(() => {
+      const current = this.options.getState(tabID);
+      if (!current) return;
+      this.initSyncState(tabID);
+      current.syncPaused = false;
+      current.sidebarToggleTimers = [];
+    }, 200);
+    state.sidebarToggleTimers.push(timerID);
+  }
+
   async syncPositionAndScale(
     tabID: string,
     currentSide: SplitSide,

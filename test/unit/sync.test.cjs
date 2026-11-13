@@ -29,6 +29,8 @@ function container(top = 0, left = 0) {
 function setup() {
   const frameCallbacks = [];
   const timeouts = [];
+  const sidebarTimeouts = [];
+  const clearedSidebarTimeouts = [];
   const notifications = [];
   const leftContainer = container(100, 20);
   const rightContainer = container(30, 5);
@@ -71,6 +73,7 @@ function setup() {
     syncPaused: false,
     ctrlPressed: false,
     zoomingCount: 0,
+    sidebarToggleTimers: [],
     scrollHandler: null,
     scrollHandlerBrowser: null,
     scrollSyncRAFPending: false,
@@ -108,6 +111,11 @@ function setup() {
     getEffectivePrimarySide: (current) => current.primarySide,
     getMainWindow: () => ({
       requestAnimationFrame: (callback) => frameCallbacks.push(callback),
+      setTimeout: (callback, delay) => {
+        sidebarTimeouts.push({ callback, delay });
+        return 100 + sidebarTimeouts.length;
+      },
+      clearTimeout: (id) => clearedSidebarTimeouts.push(id),
     }),
     trackEventListener: (current, target, type, listener, options) => {
       target.addEventListener(type, listener, options);
@@ -129,6 +137,8 @@ function setup() {
     rightBrowser,
     frameCallbacks,
     timeouts,
+    sidebarTimeouts,
+    clearedSidebarTimeouts,
     notifications,
     zoomButton,
   };
@@ -160,6 +170,29 @@ test("no primary view keeps both panes independent", () => {
   rt.leftContainer.scrollTop = 150;
   rt.sync.syncViews("tab");
   assert.equal(rt.rightContainer.scrollTop, 30);
+});
+
+test("sidebar changes mirror from primary, debounce and resume scroll sync", () => {
+  const rt = setup();
+  let sidebarOpen = null;
+  rt.rightBrowser.reader.toggleSidebar = (open) => (sidebarOpen = open);
+  rt.state.sidebarToggleTimers = [9];
+  rt.sync.handleSidebarToggle("tab", rt.leftBrowser, true);
+  assert.equal(sidebarOpen, true);
+  assert.deepEqual(rt.clearedSidebarTimeouts, [9]);
+  assert.equal(rt.state.syncPaused, true);
+  assert.equal(rt.state.sidebarToggleTimers.length, 1);
+  assert.equal(rt.state.sidebarToggleTimers[0], 101);
+  assert.equal(rt.sidebarTimeouts[0].delay, 200);
+
+  rt.sync.handleSidebarToggle("tab", rt.rightBrowser, false);
+  assert.equal(sidebarOpen, true);
+  assert.equal(rt.sidebarTimeouts.length, 1);
+
+  rt.sidebarTimeouts[0].callback();
+  assert.equal(rt.state.syncPaused, false);
+  assert.equal(rt.state.sidebarToggleTimers.length, 0);
+  assert.equal(rt.state.lastPrimaryScroll.top, 100);
 });
 
 test("toolbar and keyboard zoom sync to the secondary and reset the baseline", () => {

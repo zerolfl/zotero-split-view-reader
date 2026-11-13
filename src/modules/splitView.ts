@@ -2509,7 +2509,8 @@ export class SplitViewFactory {
           this.handleReadAloudStatus(tabID, browser, status),
         openContextMenu: (params) =>
           this.openContextMenu(browser, popupset, params),
-        toggleSidebar: (open) => this.handleSidebarToggle(tabID, browser, open),
+        toggleSidebar: (open) =>
+          this.sync.handleSidebarToggle(tabID, browser, open),
         onViewStateChange: (viewState) => {
           const state = this.stateMap.get(tabID);
           if (
@@ -3157,76 +3158,6 @@ export class SplitViewFactory {
         (popup as any).openPopupAtScreen(screenX, screenY, true),
       );
     }
-  }
-
-  /**
-   * Handle sidebar toggle - sync to the other reader when sync is enabled
-   * Pauses scroll sync during sidebar animation to prevent position drift
-   */
-  private static handleSidebarToggle(
-    tabID: string,
-    sourceBrowser: XULBrowserElement,
-    open: boolean,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-    const primarySide = this.getEffectivePrimarySide(state);
-    if (!primarySide) return;
-
-    // Determine if this is the primary browser
-    const isLeft = sourceBrowser === state.leftBrowser;
-    const isPrimary =
-      (isLeft && primarySide === "left") ||
-      (!isLeft && primarySide === "right");
-
-    // Only sync from primary to secondary
-    if (!isPrimary) return;
-
-    // Cancel any pending timers from previous toggle (debounce)
-    const win = Zotero.getMainWindow();
-    for (const timerId of state.sidebarToggleTimers) {
-      win.clearTimeout(timerId);
-    }
-    state.sidebarToggleTimers = [];
-
-    // Pause sync during sidebar toggle to prevent position drift
-    state.syncPaused = true;
-
-    // Get the secondary browser
-    const secondaryBrowser = isLeft ? state.rightBrowser : state.leftBrowser;
-
-    // Toggle sidebar on secondary reader
-    try {
-      const internalReader =
-        readerRuntime.getInternalReaderFromBrowser(secondaryBrowser);
-      if (
-        internalReader &&
-        typeof internalReader.toggleSidebar === "function"
-      ) {
-        internalReader.toggleSidebar(open);
-      } else if (internalReader && internalReader._primaryView) {
-        const primaryView = internalReader._primaryView;
-        if (primaryView && typeof primaryView.setSidebarOpen === "function") {
-          primaryView.setSidebarOpen(open);
-        }
-      }
-    } catch {
-      // Ignore errors
-    }
-
-    // Resume sync after sidebar animation completes and reinitialize position
-    // Only set one timer - the final one that resumes sync
-    const timerId = win.setTimeout(() => {
-      const s = this.stateMap.get(tabID);
-      if (!s) return;
-      // Reinitialize sync state with current positions
-      this.sync.initSyncState(tabID);
-      s.syncPaused = false;
-      // Clear timer list
-      s.sidebarToggleTimers = [];
-    }, 200);
-
-    state.sidebarToggleTimers.push(timerId);
   }
 
   /**
