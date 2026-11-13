@@ -31,6 +31,7 @@ import { SplitReaderTabAdapter } from "../platform/splitReaderTab";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
+import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -38,6 +39,22 @@ import { clearPref, getPref } from "../utils/prefs";
 export class SplitViewFactory {
   /** Per-tab split view states. Each tab can independently have its own split view. */
   private static stateMap: Map<string, SplitTabState> = new Map();
+  private static tabNotifier = new SplitTabNotifier({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getActiveParentItemID: (state) => this.getActiveParentItemID(state),
+    showForSplitView: (win) => splitContextPane.showForSplitView(win),
+    updateContextPane: (tabID, win, itemID) =>
+      splitContextPane.updateItem(tabID, win, itemID),
+    captureViewState: (browser) =>
+      readerView.getCurrentViewStateFromBrowser(browser),
+    saveViewState: (itemID, viewState) =>
+      attachmentState.saveViewStateToDisk(itemID, viewState),
+    cleanupResources: (tabID) => this.cleanupTabResources(tabID),
+    registerNotifier: (callback) =>
+      Zotero.Notifier.registerObserver(callback, ["tab"], "splitView", 20),
+    unregisterNotifier: (id) => Zotero.Notifier.unregisterObserver(id),
+    debug: (message) => Zotero.debug(message),
+  });
   private static separateTargets = new SeparateViewTargets({
     getTabs: () => tabsForWindow(Zotero.getMainWindow()),
     getReader: (tabID) => Zotero.Reader.getByTabID(tabID),
@@ -193,7 +210,7 @@ export class SplitViewFactory {
         shell.rightBrowser,
         state.splitRatio,
       );
-      this.ensureGlobalTabNotifier(win);
+      this.tabNotifier.ensureRegistered(win);
       this.setupContextPane(tabID, win);
     },
     initializeReader: (...args) => this.initializeReader(...args),
@@ -310,9 +327,6 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
-  /** Global tab notifier ID - shared across all split view tabs */
-  private static globalTabNotifierID: string | null = null;
-
   /** Preference observer IDs for scrollbar RGB - apply new color to open split view tabs */
   private static scrollbarPrefObserverIDs: (symbol | null)[] = [
     null,
@@ -601,44 +615,7 @@ export class SplitViewFactory {
   static unregisterAll() {
     this.pdfSelector.dispose();
     this.readerContextMenu.unregister();
-    // Save view states for all active split views before cleanup.
-    // This ensures PDF page/zoom positions are preserved when Zotero closes.
-    for (const [_tabID, state] of this.stateMap.entries()) {
-      if (state.isCleaningUp) continue;
-      try {
-        let leftCurrentState: any = null;
-        let rightCurrentState: any = null;
-        try {
-          leftCurrentState = readerView.getCurrentViewStateFromBrowser(
-            state.leftBrowser,
-          );
-        } catch {
-          // Browser may be dead
-        }
-        try {
-          rightCurrentState = readerView.getCurrentViewStateFromBrowser(
-            state.rightBrowser,
-          );
-        } catch {
-          // Browser may be dead
-        }
-        // Fire and forget - async save
-        Promise.all([
-          attachmentState.saveViewStateToDisk(
-            state.leftItemID,
-            leftCurrentState || state.leftViewState,
-          ),
-          attachmentState.saveViewStateToDisk(
-            state.rightItemID,
-            rightCurrentState || state.rightViewState,
-          ),
-        ]).catch(() => {
-          /* Ignore save errors during shutdown */
-        });
-      } catch {
-        // Ignore errors during shutdown
-      }
-    }
+    this.tabNotifier.saveAll(this.stateMap.values());
 
     // Clean up all active split views
     for (const tabID of this.stateMap.keys()) {
@@ -654,17 +631,7 @@ export class SplitViewFactory {
 
     this.session.unregister();
 
-    // Unregister global tab notifier
-    if (this.globalTabNotifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(this.globalTabNotifierID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: unregisterAll - unregisterObserver(globalTab) failed: ${e}`,
-        );
-      }
-      this.globalTabNotifierID = null;
-    }
+    this.tabNotifier.unregister();
 
     // Unregister preference observers
     this.scrollbarPrefObserverIDs.forEach((id, i) => {
@@ -1510,17 +1477,7 @@ export class SplitViewFactory {
     // Disconnect context pane observer
     splitContextPane.disconnectObserver(contextPaneObserver);
 
-    // If no more split views, unregister global tab notifier
-    if (this.stateMap.size === 0 && this.globalTabNotifierID) {
-      try {
-        Zotero.Notifier.unregisterObserver(this.globalTabNotifierID);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup - unregisterObserver(globalTab) failed: ${e}`,
-        );
-      }
-      this.globalTabNotifierID = null;
-    }
+    if (this.stateMap.size === 0) this.tabNotifier.unregister();
   }
 
   /**
@@ -1534,43 +1491,7 @@ export class SplitViewFactory {
     if (state.isCleaningUp) return;
     state.isCleaningUp = true;
 
-    // Save view states to disk before cleanup (fire and forget)
-    const leftItemID = state.leftItemID;
-    const rightItemID = state.rightItemID;
-    const leftViewState = state.leftViewState;
-    const rightViewState = state.rightViewState;
-
-    // Try to get current state from browsers (may fail if dead)
-    let leftCurrentState: any = null;
-    let rightCurrentState: any = null;
-    try {
-      leftCurrentState = readerView.getCurrentViewStateFromBrowser(
-        state.leftBrowser,
-      );
-    } catch {
-      // Browser may be dead
-    }
-    try {
-      rightCurrentState = readerView.getCurrentViewStateFromBrowser(
-        state.rightBrowser,
-      );
-    } catch {
-      // Browser may be dead
-    }
-
-    // Save states asynchronously (don't await)
-    Promise.all([
-      attachmentState.saveViewStateToDisk(
-        leftItemID,
-        leftCurrentState || leftViewState,
-      ),
-      attachmentState.saveViewStateToDisk(
-        rightItemID,
-        rightCurrentState || rightViewState,
-      ),
-    ]).catch(() => {
-      /* Ignore save errors */
-    });
+    this.tabNotifier.save(state);
 
     // Reset isCleaningUp so cleanupTabResources can process it
     state.isCleaningUp = false;
@@ -1702,99 +1623,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Ensure the global tab notifier is registered.
-   * This is a single notifier shared across all split view tabs.
-   * It handles CSS class toggling and tab close cleanup for all split views.
-   */
-  private static ensureGlobalTabNotifier(win: Window) {
-    // Already registered
-    if (this.globalTabNotifierID) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    const notifierCallback = {
-      notify: (
-        action: string,
-        type: string,
-        ids: (string | number)[],
-        _extraData: any,
-      ) => {
-        if (type !== "tab") return;
-
-        if (action === "select") {
-          const selectedTabID = String(ids[0]);
-          const selectedState = self.stateMap.get(selectedTabID);
-
-          if (selectedState && !selectedState.isCleaningUp) {
-            // This tab has split view - activate CSS and context pane
-            win.document.documentElement?.classList.add("split-view-active");
-            splitContextPane.showForSplitView(win);
-            // Update context pane content to show the active side's item
-            const parentItemID = self.getActiveParentItemID(selectedState);
-            splitContextPane.updateItem(selectedTabID, win, parentItemID);
-          } else {
-            // This tab has no split view - remove CSS class
-            win.document.documentElement?.classList.remove("split-view-active");
-          }
-        } else if (action === "close") {
-          // Handle tab close - cleanup if this tab has split view
-          const closedTabID = String(ids[0]);
-          const closedState = self.stateMap.get(closedTabID);
-          if (closedState && !closedState.isCleaningUp) {
-            // Save states before cleanup
-            const leftItemID = closedState.leftItemID;
-            const rightItemID = closedState.rightItemID;
-            const leftViewState = closedState.leftViewState;
-            const rightViewState = closedState.rightViewState;
-
-            // Try to get current state from browsers
-            let leftCurrentState: any = null;
-            let rightCurrentState: any = null;
-            try {
-              leftCurrentState = readerView.getCurrentViewStateFromBrowser(
-                closedState.leftBrowser,
-              );
-            } catch {
-              /* Browser may be dead */
-            }
-            try {
-              rightCurrentState = readerView.getCurrentViewStateFromBrowser(
-                closedState.rightBrowser,
-              );
-            } catch {
-              /* Browser may be dead */
-            }
-
-            // Save states asynchronously
-            Promise.all([
-              attachmentState.saveViewStateToDisk(
-                leftItemID,
-                leftCurrentState || leftViewState,
-              ),
-              attachmentState.saveViewStateToDisk(
-                rightItemID,
-                rightCurrentState || rightViewState,
-              ),
-            ]).catch(() => {
-              /* Ignore save errors */
-            });
-
-            self.cleanupTabResources(closedTabID);
-          }
-        }
-      },
-    };
-
-    this.globalTabNotifierID = Zotero.Notifier.registerObserver(
-      notifierCallback,
-      ["tab"],
-      "splitView",
-      20,
-    );
-  }
-
-  /**
    * Set up context pane for our split view tab
    * Note: Polling removed - tab notifier handles tab selection events
    */
@@ -1809,8 +1637,7 @@ export class SplitViewFactory {
     // (Replaced multiple 50ms/150ms/300ms calls with a single 300ms call)
     this.trackTimeout(state, () => splitContextPane.showForSplitView(win), 300);
 
-    // Note: Polling interval removed - ensureGlobalTabNotifier() already handles
-    // tab selection events and calls showForSplitView() when needed
+    // Tab selection events call showForSplitView() through the shared notifier.
   }
 
   // NOTE: The old singleton cleanup() method has been replaced by:
