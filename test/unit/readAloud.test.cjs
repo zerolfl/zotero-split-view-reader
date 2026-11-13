@@ -1,34 +1,8 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { setTimeout, clearTimeout } = require("node:timers");
 const { URLSearchParams } = require("node:url");
-const vm = require("node:vm");
-const ts = require("typescript");
-
-function load(filename, globals, imports = {}) {
-  const module = { exports: {} };
-  const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-  });
-  vm.runInNewContext(
-    outputText,
-    {
-      module,
-      exports: module.exports,
-      require: (id) => {
-        assert.ok(id in imports, `Unexpected import: ${id}`);
-        return imports[id];
-      },
-      ...globals,
-    },
-    { filename },
-  );
-  return module.exports;
-}
+const { load } = require("./helpers.cjs");
 
 function runtime() {
   const writes = [];
