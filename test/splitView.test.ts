@@ -77,9 +77,7 @@ describe("split reader integration", function () {
       if (check()) return;
       await Zotero.Promise.delay(30);
     }
-    assert.fail(
-      `Timed out waiting for annotation persistence: ${errors.join("; ")}`,
-    );
+    assert.fail(`Timed out waiting for reader state: ${errors.join("; ")}`);
   }
 
   function contentData(browser: XULBrowserElement, value: any): any {
@@ -122,6 +120,11 @@ describe("split reader integration", function () {
     assert.equal(
       readerView.getImmediateViewStateFromReader(first).pageIndex,
       1,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.rightBrowser).pageIndex,
+      0,
+      "right position remains independent before saving",
     );
     assert.equal(
       readerView.getImmediateViewStateFromReader(second).pageIndex,
@@ -186,6 +189,13 @@ describe("split reader integration", function () {
     const state = await open(true);
     factory.setPrimarySide(state.tabID, null);
     const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
+    const second = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(second, {
+      pageIndex: 0,
+      scale: 100,
+    });
     await readerView.applyViewStateToReader(first, {
       pageIndex: 1,
       scale: 125,
@@ -351,6 +361,157 @@ describe("split reader integration", function () {
     assert.equal(data.rightViewState.pageIndex, 1);
     assert.strictEqual(data.primarySide, null);
     assert.equal(data.activeSide, "right");
+  });
+
+  it("closes one side and keeps the other reader position", async function () {
+    const state = await open(false);
+    factory.setPrimarySide(state.tabID, null);
+    const leftReader = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const rightReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(leftReader, {
+      pageIndex: 0,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(rightReader, {
+      pageIndex: 1,
+      scale: 125,
+    });
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.rightBrowser).pageIndex,
+      1,
+      "visible right reader position before closing",
+    );
+
+    await factory.revertToSingleReader(state.tabID, "left");
+
+    assert.isUndefined(factory.stateMap.get(state.tabID));
+    const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
+    const readers = tabs.filter(
+      (tab: any) =>
+        tab.data?.itemID === left.id || tab.data?.itemID === right.id,
+    );
+    assert.lengthOf(readers, 1);
+    assert.equal(readers[0].data.itemID, right.id);
+    assert.isUndefined(readers[0].data.isSplitView);
+    await waitFor(() => {
+      const reader = Zotero.Reader.getByTabID(readers[0].id);
+      return !!reader && !!readerView.getImmediateViewStateFromReader(reader);
+    });
+    const keptReader = Zotero.Reader.getByTabID(readers[0].id);
+    await readerRuntime.waitForReaderReady(keptReader);
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(keptReader).pageIndex,
+      1,
+    );
+  });
+
+  it("separates different PDFs into their existing reader tabs with each position", async function () {
+    const state = await open(false);
+    factory.setPrimarySide(state.tabID, null);
+    const leftSplitReader = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const rightSplitReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(leftSplitReader, {
+      pageIndex: 1,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(rightSplitReader, {
+      pageIndex: 0,
+      scale: 125,
+    });
+
+    const existingLeft = await Zotero.Reader.open(left.id, undefined, {
+      allowDuplicate: true,
+    });
+    const existingRight = await Zotero.Reader.open(right.id, undefined, {
+      allowDuplicate: true,
+    });
+    await readerRuntime.waitForReaderReady(existingLeft);
+    await readerRuntime.waitForReaderReady(existingRight);
+    await readerView.applyViewStateToReader(existingLeft, {
+      pageIndex: 0,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(existingRight, {
+      pageIndex: 1,
+      scale: 100,
+    });
+
+    await factory.separateViews(state.tabID, "right");
+
+    assert.isUndefined(factory.stateMap.get(state.tabID));
+    assert.strictEqual(
+      Zotero.Reader.getByTabID(existingLeft!.tabID),
+      existingLeft,
+    );
+    assert.strictEqual(
+      Zotero.Reader.getByTabID(existingRight!.tabID),
+      existingRight,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(existingLeft).pageIndex,
+      1,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(existingRight).pageIndex,
+      0,
+    );
+    assert.isUndefined(
+      (Zotero.getMainWindow().Zotero_Tabs as any)._getTab(state.tabID).tab,
+    );
+  });
+
+  it("separates the selected position when both views use the same PDF", async function () {
+    const state = await open(true);
+    factory.setPrimarySide(state.tabID, null);
+    const leftReader = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const rightReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(leftReader, {
+      pageIndex: 0,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(rightReader, {
+      pageIndex: 1,
+      scale: 125,
+    });
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.rightBrowser).pageIndex,
+      1,
+      "visible right reader position before separating",
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.rightBrowser).scale,
+      125,
+      "visible right reader scale before separating",
+    );
+
+    await factory.separateViews(state.tabID, "right");
+
+    assert.isUndefined(factory.stateMap.get(state.tabID));
+    const readers = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs.filter(
+      (tab: any) => tab.data?.itemID === left.id,
+    );
+    assert.lengthOf(readers, 1);
+    await waitFor(() => !!Zotero.Reader.getByTabID(readers[0].id));
+    const reader = Zotero.Reader.getByTabID(readers[0].id);
+    await readerRuntime.waitForReaderReady(reader);
+    assert.equal(reader.itemID, left.id);
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(reader).pageIndex,
+      1,
+    );
+    assert.equal(readerView.getImmediateViewStateFromReader(reader).scale, 125);
   });
 
   it("rebinds annotation and selection sync after replacing readers for a swap", async function () {

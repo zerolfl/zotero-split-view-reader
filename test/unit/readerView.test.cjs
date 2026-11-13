@@ -3,14 +3,14 @@ const { test } = require("node:test");
 const { load } = require("./helpers.cjs");
 const { structuredClone } = globalThis;
 
-function runtime() {
+function runtime(readerRuntime = {}) {
   return load(
     "src/platform/readerView.ts",
     {
       Zotero: { debug() {} },
       Components: { utils: { cloneInto: (value) => structuredClone(value) } },
     },
-    { "./readerRuntime": { readerRuntime: {} } },
+    { "./readerRuntime": { readerRuntime } },
   ).readerView;
 }
 
@@ -61,6 +61,15 @@ test("capture keeps the visible position and reading metadata ahead of stale dis
     internal._state.primaryViewState.lastReadAloudPosition.pageIndex,
     0,
   );
+});
+
+test("current browser state prefers the live PDF position and keeps cached metadata", () => {
+  const view = runtime({ getInternalReaderFromBrowser: () => internal });
+  const { internal } = reader();
+  const state = view.getCurrentViewStateFromBrowser({});
+  assert.equal(state.pageIndex, 1);
+  assert.equal(state.scale, 125);
+  assert.equal(state.lastReadAloudPosition.pageIndex, 0);
 });
 
 test("state application clamps pages and drops offsets that belong to another page", async () => {

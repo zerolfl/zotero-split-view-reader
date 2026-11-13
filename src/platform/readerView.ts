@@ -83,9 +83,14 @@ function getImmediateViewStateFromReader(reader: any): any {
 function getCurrentViewStateFromBrowser(browser: XULBrowserElement): any {
   try {
     const internalReader = readerRuntime.getInternalReaderFromBrowser(browser);
-    if (internalReader?._state?.primaryViewState) {
-      return JSON.parse(JSON.stringify(internalReader._state.primaryViewState));
-    }
+    if (!internalReader) return null;
+    const cached = internalReader._state?.primaryViewState;
+    const visible = getImmediateViewStateFromReader(internalReader);
+    if (!cached && !visible) return null;
+    return {
+      ...(cached ? JSON.parse(JSON.stringify(cached)) : {}),
+      ...visible,
+    };
   } catch {
     // Ignore errors
   }
