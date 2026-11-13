@@ -34,6 +34,7 @@ import { SplitViewCreationService } from "./splitView/creation";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
+import { ReaderMenuPresentation } from "./splitView/readerMenuPresentation";
 import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { SplitSessionRestore } from "./splitView/sessionRestore";
@@ -158,6 +159,16 @@ export class SplitViewFactory {
     isActiveSplitView: (id) => this.hasActiveSplitState(id),
     showInLibrary: (id, win) => this.showInLibraryForActiveSide(id, win),
   });
+  private static menuPresentation = new ReaderMenuPresentation({
+    getString: (key, options) =>
+      options
+        ? getString(key as Parameters<typeof getString>[0], options as any)
+        : getString(key as Parameters<typeof getString>[0]),
+    getAddonRef: () => addon.data.config.addonRef,
+    getState: (id) => this.stateMap.get(id) ?? null,
+    getPrimaryMenuConfig: (state, side) =>
+      this.primaryView.getMenuConfig(state, side),
+  });
   private static readerContextMenu = new SplitReaderContextMenu({
     isAlive: () => !!addon.data.alive,
     getState: (id) => this.stateMap.get(id) ?? null,
@@ -165,12 +176,13 @@ export class SplitViewFactory {
       this.readAloudCoordinator.getReaderSide(id, reader as any),
     getPrimaryMenuConfig: (state, side) =>
       this.primaryView.getMenuConfig(state, side),
-    getString: (key) => getString(key as Parameters<typeof getString>[0]),
-    getCloseMenuLabel: () => this.getCloseViewMenuLabel(),
+    getString: (key) => this.menuPresentation.getString(key),
+    getCloseMenuLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
     getSetPrimaryMenuLabel: (menuState) =>
-      this.getSetPrimaryMenuLabel(menuState),
-    getIconURI: (name) => this.getIconURI(name),
-    setMenuItemIcon: (item, uri) => this.setMenuItemIcon(item, uri),
+      this.menuPresentation.getSetPrimaryMenuLabel(menuState),
+    getIconURI: (name) => this.menuPresentation.getIconURI(name),
+    setMenuItemIcon: (item, uri) =>
+      this.menuPresentation.setMenuItemIcon(item, uri),
     swapPDFs: (id) => this.swapPDFs(id),
     separateViews: (id, side) => void this.separateViews(id, side),
     handleSplitView: (reader) => void this.handleSplitView(reader),
@@ -183,7 +195,7 @@ export class SplitViewFactory {
     activateSide: (id, side, win) =>
       this.interactions.activateSide(id, side, win),
     refreshPrimaryMenuItem: (item, id, side) =>
-      this.refreshPrimaryMenuItemElement(item, id, side),
+      this.menuPresentation.refreshPrimaryMenuItem(item, id, side),
   });
   private static session = new SplitSession(
     (id, data) => this.restoreSplitViewFromSession(id, data),
@@ -354,16 +366,17 @@ export class SplitViewFactory {
     getMainWindow: () => Zotero.getMainWindow(),
     getStates: () => this.stateMap.entries(),
     getState: (tabID) => this.stateMap.get(tabID) || null,
-    getString: (key, options) =>
-      options
-        ? getString(key as Parameters<typeof getString>[0], options as any)
-        : getString(key as Parameters<typeof getString>[0]),
-    getIconURI: (name) => this.getIconURI(name),
-    setMenuItemIcon: (item, uri) => this.setMenuItemIcon(item, uri),
-    getCloseViewMenuLabel: () => this.getCloseViewMenuLabel(),
-    getOpenAnotherPDFMenuLabel: () => this.getOpenAnotherPDFMenuLabel(),
-    getSyncPositionMenuLabel: (side) => this.getSyncPositionMenuLabel(side),
-    getSetPrimaryMenuLabel: (state) => this.getSetPrimaryMenuLabel(state),
+    getString: (key, options) => this.menuPresentation.getString(key, options),
+    getIconURI: (name) => this.menuPresentation.getIconURI(name),
+    setMenuItemIcon: (item, uri) =>
+      this.menuPresentation.setMenuItemIcon(item, uri),
+    getCloseViewMenuLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
+    getOpenAnotherPDFMenuLabel: () =>
+      this.menuPresentation.getOpenAnotherPDFMenuLabel(),
+    getSyncPositionMenuLabel: (side) =>
+      this.menuPresentation.getSyncPositionMenuLabel(side),
+    getSetPrimaryMenuLabel: (state) =>
+      this.menuPresentation.getSetPrimaryMenuLabel(state),
     getPrimaryMenuConfig: (state, side) =>
       this.primaryView.getMenuConfig(state, side),
     swapPDFs: (tabID) => this.swapPDFs(tabID),
@@ -376,7 +389,7 @@ export class SplitViewFactory {
     activateSide: (tabID, side, win) =>
       this.interactions.activateSide(tabID, side, win),
     refreshPrimaryMenuItem: (item, tabID, side) =>
-      this.refreshPrimaryMenuItemElement(item, tabID, side),
+      this.menuPresentation.refreshPrimaryMenuItem(item, tabID, side),
     schedule: (callback) => setTimeout(callback),
   });
   private static pdfSwap = new PDFSwapService({
@@ -545,88 +558,11 @@ export class SplitViewFactory {
     this.tabTitles.registerItemNotifier();
   }
 
-  /**
-   * Build a chrome:// URI for an icon bundled with this addon
-   */
-  private static getIconURI(name: string): string {
-    return `chrome://${addon.data.config.addonRef}/content/icons/${name}`;
-  }
-
-  /**
-   * Apply an icon to a XUL menuitem element (menuitem-iconic style)
-   */
-  private static setMenuItemIcon(menuitem: Element, iconURI: string) {
-    menuitem.classList.add("menuitem-iconic");
-    menuitem.setAttribute("image", iconURI);
-    menuitem.setAttribute(
-      "style",
-      "-moz-context-properties: fill; fill: currentColor;",
-    );
-  }
-
-  private static getCloseViewMenuLabel(): string {
-    return getString("splitview-close-menu-label");
-  }
-
-  private static getOpenAnotherPDFMenuLabel(): string {
-    return getString("splitview-open-another");
-  }
-
-  private static getSyncPositionMenuLabel(
-    currentSide: "left" | "right" | null,
-  ): string {
-    if (!currentSide) {
-      return getString("splitview-sync-position");
-    }
-    return getString("splitview-sync-position", {
-      args: {
-        side: currentSide === "left" ? "right" : "left",
-      },
-    });
-  }
-
-  private static getSetPrimaryMenuLabel(
-    state: "current" | "other" | "none",
-  ): string {
-    return getString("splitview-set-primary", {
-      args: { state },
-    });
-  }
-
   private static clearLegacySyncEnabledPref(): void {
     // The standalone syncEnabled pref was removed. Existing tabs restore their
     // old sync state from session data, so new split views should no longer
     // consult this hidden pref as a long-term default.
     clearPref("syncEnabled");
-  }
-
-  private static refreshPrimaryMenuItemElement(
-    menuitem: Element,
-    tabID: string,
-    side: "left" | "right" | null,
-  ) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return null;
-
-    const config = this.primaryView.getMenuConfig(state, side);
-    menuitem.setAttribute(
-      "label",
-      this.getSetPrimaryMenuLabel(config.menuState),
-    );
-    if (config.disabled) {
-      menuitem.setAttribute("disabled", "true");
-    } else {
-      menuitem.removeAttribute("disabled");
-    }
-    this.setMenuItemIcon(
-      menuitem,
-      this.getIconURI(
-        config.isCurrentPrimary
-          ? "primary_window_24dp.svg"
-          : "standby_24dp.svg",
-      ),
-    );
-    return config;
   }
 
   /**
@@ -978,7 +914,7 @@ export class SplitViewFactory {
 
     const observer = installCloseButton(browser, {
       side,
-      label: this.getCloseViewMenuLabel(),
+      label: this.menuPresentation.getCloseViewMenuLabel(),
       isActive: () => this.hasActiveSplitState(tabID),
       onClose: () => void this.revertToSingleReader(tabID, side),
     });
