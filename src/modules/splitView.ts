@@ -35,6 +35,7 @@ import { SplitViewConversionService } from "./splitView/conversion";
 import { SplitViewShutdown } from "./splitView/shutdown";
 import { SplitTabResourceTracker } from "./splitView/resourceTracker";
 import { SplitTabStateStore } from "./splitView/stateStore";
+import { SplitViewContextPane } from "./splitView/contextPane";
 import { SplitReaderEntryFlow } from "./splitView/readerEntryFlow";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
@@ -221,6 +222,16 @@ export class SplitViewFactory {
   private static resourceTracker = new SplitTabResourceTracker(() =>
     Zotero.getMainWindow(),
   );
+  private static splitContextPane = new SplitViewContextPane({
+    getState: (tabID) => this.stateStore.get(tabID),
+    getMainWindow: () => Zotero.getMainWindow(),
+    showForSplitView: (win) => splitContextPane.showForSplitView(win),
+    toggleMainPane: (win) => splitContextPane.toggleMainPane(win),
+    isMainPaneOpen: (win) => splitContextPane.isMainPaneOpen(win),
+    setReaderOpen: (browser, open) =>
+      splitContextPane.setReaderOpen(browser, open),
+    trackTimeout: (...args) => this.resourceTracker.trackTimeout(...args),
+  });
   private static sync = new SplitSync({
     getState: (id) => this.stateStore.get(id),
     getEffectivePrimarySide: (state) =>
@@ -319,18 +330,8 @@ export class SplitViewFactory {
       deleteAnnotations: (itemID, ids) => annotationStore.remove(itemID, ids),
       reportAnnotationFailure: (browser, error) =>
         reportAnnotationFailure(browser, error),
-      toggleContextPane: (tabID) => {
-        const win = Zotero.getMainWindow();
-        const contextPane = (win as any).ZoteroContextPane;
-        if (!contextPane) return;
-        contextPane.togglePane();
-        setTimeout(() => {
-          const state = this.stateStore.get(tabID);
-          if (!state?.rightBrowser) return;
-          const isOpen = !((win as any).ZoteroContextPane?.collapsed ?? true);
-          splitContextPane.setReaderOpen(state.rightBrowser, isOpen);
-        }, 50);
-      },
+      toggleContextPane: (tabID) =>
+        this.splitContextPane.toggleForReader(tabID),
       afterReady: (tabID, browser, side) => {
         this.readerToolbar.installCloseButton(tabID, browser, side);
         if (side === "left") splitContextPane.hideReaderSidenav(browser);
@@ -364,7 +365,7 @@ export class SplitViewFactory {
         state.splitRatio,
       );
       this.tabNotifier.ensureRegistered(win);
-      this.setupContextPane(tabID, win);
+      this.splitContextPane.setupForCreatedTab(tabID, win);
     },
     initializeReader: (...args) => this.initializeReader(...args),
     showLoaded: (isSamePDF) => this.notifications.showCreated(isSamePDF),
@@ -797,28 +798,6 @@ export class SplitViewFactory {
     }
 
     this.notifications.showClosed();
-  }
-
-  /**
-   * Set up context pane for our split view tab
-   * Note: Polling removed - tab notifier handles tab selection events
-   */
-  private static setupContextPane(tabID: string, win: Window) {
-    const state = this.stateStore.get(tabID);
-    if (!state) return;
-
-    // Initialize immediately
-    splitContextPane.showForSplitView(win);
-
-    // Single delayed call to ensure async updates complete
-    // (Replaced multiple 50ms/150ms/300ms calls with a single 300ms call)
-    this.resourceTracker.trackTimeout(
-      state,
-      () => splitContextPane.showForSplitView(win),
-      300,
-    );
-
-    // Tab selection events call showForSplitView() through the shared notifier.
   }
 
   // NOTE: The old singleton cleanup() method has been replaced by:

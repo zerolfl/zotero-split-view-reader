@@ -1,6 +1,17 @@
 import { readerRuntime } from "./readerRuntime";
 
 export class ContextPaneAdapter {
+  toggleMainPane(win: Window): boolean {
+    const contextPane = (win as any).ZoteroContextPane;
+    if (!contextPane) return false;
+    contextPane.togglePane();
+    return true;
+  }
+
+  isMainPaneOpen(win: Window): boolean {
+    return !((win as any).ZoteroContextPane?.collapsed ?? true);
+  }
+
   hideReaderSidenav(browser: XULBrowserElement) {
     try {
       const win = browser.contentWindow;

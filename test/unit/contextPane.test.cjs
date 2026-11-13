@@ -9,6 +9,26 @@ function createAdapter(globals = {}, readerRuntime = {}) {
   return new ContextPaneAdapter();
 }
 
+test("context pane adapter toggles and reads the native pane state", () => {
+  let toggled = 0;
+  const adapter = createAdapter();
+  const win = {
+    ZoteroContextPane: {
+      collapsed: false,
+      togglePane: () => toggled++,
+    },
+  };
+
+  assert.equal(adapter.toggleMainPane(win), true);
+  assert.equal(toggled, 1);
+  assert.equal(adapter.isMainPaneOpen(win), true);
+
+  win.ZoteroContextPane.collapsed = true;
+  assert.equal(adapter.isMainPaneOpen(win), false);
+  assert.equal(adapter.toggleMainPane({}), false);
+  assert.equal(adapter.isMainPaneOpen({}), false);
+});
+
 test("context pane adapter updates and selects the split tab item details", () => {
   const item = { id: 9, libraryID: 2, deleted: false };
   const appended = [];
