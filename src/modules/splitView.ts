@@ -34,6 +34,7 @@ import { SplitViewCreationService } from "./splitView/creation";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
+import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -55,6 +56,24 @@ export class SplitViewFactory {
     registerNotifier: (callback) =>
       Zotero.Notifier.registerObserver(callback, ["tab"], "splitView", 20),
     unregisterNotifier: (id) => Zotero.Notifier.unregisterObserver(id),
+    debug: (message) => Zotero.debug(message),
+  });
+  private static tabCleanup = new SplitTabCleanup({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    removeState: (tabID) => this.stateMap.delete(tabID),
+    hasState: (tabID) => this.stateMap.has(tabID),
+    hasAnyState: () => this.stateMap.size > 0,
+    pauseReader: (browser) =>
+      this.readAloudCoordinator.pauseBrowser(browser, true),
+    setAudioStatus: (tabID) =>
+      this.setSplitTabAudioStatus(tabID, { active: false, paused: false }),
+    unloadBrowser: (browser) => readerRuntime.unloadBrowser(browser),
+    stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
+    getMainWindow: () => Zotero.getMainWindow(),
+    getSelectedTabID: (win) => tabsForWindow(win)?.selectedID || null,
+    disconnectContextPaneObserver: (observer) =>
+      splitContextPane.disconnectObserver(observer),
+    unregisterTabNotifier: () => this.tabNotifier.unregister(),
     debug: (message) => Zotero.debug(message),
   });
   private static separateTargets = new SeparateViewTargets({
@@ -1127,147 +1146,7 @@ export class SplitViewFactory {
    * Core cleanup logic shared by cleanupTab and cleanupTabResources.
    */
   private static cleanupTabResources(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state) return;
-
-    // Mark as cleaning up to prevent further operations
-    state.isCleaningUp = true;
-
-    const leftBrowser = state.leftBrowser;
-    const rightBrowser = state.rightBrowser;
-    state.disposeAnnotations?.();
-    state.disposeAnnotations = undefined;
-
-    // Stop active Read Aloud before unloading embedded readers.
-    this.readAloudCoordinator.pauseBrowser(leftBrowser, true);
-    this.readAloudCoordinator.pauseBrowser(rightBrowser, true);
-    this.setSplitTabAudioStatus(tabID, { active: false, paused: false });
-
-    // Unload browsers FIRST to prevent dead object errors from callbacks
-    // This stops the internal readers from firing more callbacks
-    readerRuntime.unloadBrowser(leftBrowser);
-    readerRuntime.unloadBrowser(rightBrowser);
-
-    // Store references before removing from map
-    const eventListeners = [...state.eventListeners];
-    const timeoutIds = [...state.timeoutIds];
-    const toolbarCloseObservers = [...state.toolbarCloseObservers];
-    const sidebarToggleTimers = [...state.sidebarToggleTimers];
-    const resizeTimerId = state.resizeTimerId;
-    const contextPaneObserver = state.contextPaneObserver;
-    const dragOverlay = state.dragOverlay;
-
-    // Clear state arrays first to prevent re-entry
-    state.eventListeners = [];
-    state.timeoutIds = [];
-    state.toolbarCloseObservers = [];
-    state.sidebarToggleTimers = [];
-    state.leftViewerContainer = null;
-    state.rightViewerContainer = null;
-    state.resizeTimerId = null;
-    state.dragOverlay = null;
-    state.contextPaneObserver = null;
-
-    // Stop sync polling before other cleanup
-    this.sync.stopSyncPolling(tabID);
-
-    // Remove from map
-    this.stateMap.delete(tabID);
-
-    let win: Window | null = null;
-    try {
-      win = Zotero.getMainWindow();
-    } catch (e) {
-      Zotero.debug(`Split view: cleanup ${tabID} - getMainWindow failed: ${e}`);
-    }
-
-    // Remove split-view-active class only if no other split views are active for the current tab
-    if (win) {
-      try {
-        const Zotero_Tabs = tabsForWindow(win);
-        const selectedTabID = Zotero_Tabs?.selectedID;
-        if (!selectedTabID || !this.stateMap.has(selectedTabID)) {
-          win.document.documentElement?.classList.remove("split-view-active");
-        }
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - remove class failed: ${e}`,
-        );
-      }
-    }
-
-    // Remove all tracked event listeners
-    for (const { target, type, listener, options } of eventListeners) {
-      try {
-        target.removeEventListener(type, listener, options);
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - removeEventListener(${type}) failed: ${e}`,
-        );
-      }
-    }
-
-    // Disconnect toolbar close button observers
-    for (const { observer } of toolbarCloseObservers) {
-      try {
-        observer.disconnect();
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - toolbar observer disconnect failed: ${e}`,
-        );
-      }
-    }
-
-    // Remove resizer drag overlay if tab was closed during drag (restores cursor and clickability)
-    if (dragOverlay && dragOverlay.parentNode) {
-      try {
-        dragOverlay.remove();
-      } catch (e) {
-        Zotero.debug(
-          `Split view: cleanup ${tabID} - dragOverlay.remove failed: ${e}`,
-        );
-      }
-    }
-
-    // Clear all tracked timeouts
-    if (win) {
-      for (const id of timeoutIds) {
-        try {
-          win.clearTimeout(id);
-        } catch (e) {
-          Zotero.debug(
-            `Split view: cleanup ${tabID} - clearTimeout failed: ${e}`,
-          );
-        }
-      }
-
-      // Clear sidebar toggle timers
-      for (const timerId of sidebarToggleTimers) {
-        try {
-          win.clearTimeout(timerId);
-        } catch (e) {
-          Zotero.debug(
-            `Split view: cleanup ${tabID} - clearTimeout(sidebar) failed: ${e}`,
-          );
-        }
-      }
-
-      // Clear resize debounce timer
-      if (resizeTimerId !== null) {
-        try {
-          win.clearTimeout(resizeTimerId);
-        } catch (e) {
-          Zotero.debug(
-            `Split view: cleanup ${tabID} - clearTimeout(resize) failed: ${e}`,
-          );
-        }
-      }
-    }
-
-    // Disconnect context pane observer
-    splitContextPane.disconnectObserver(contextPaneObserver);
-
-    if (this.stateMap.size === 0) this.tabNotifier.unregister();
+    this.tabCleanup.cleanup(tabID);
   }
 
   /**
