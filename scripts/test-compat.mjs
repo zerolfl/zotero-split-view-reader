@@ -1,5 +1,5 @@
 import { Config, Test } from "zotero-plugin-scaffold";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import process from "node:process";
 
@@ -22,8 +22,11 @@ const ctx = await Config.loadConfig({
       "test:prebuild": async (context) => {
         const path = resolve(context.dist, "addon/manifest.json");
         const manifest = JSON.parse(await readFile(path, "utf8"));
-        manifest.applications.zotero.strict_max_version = "10.*";
-        await writeFile(path, JSON.stringify(manifest, null, 2));
+        if (manifest.applications.zotero.strict_max_version !== "10.*") {
+          throw new Error(
+            "Test build does not declare Zotero 10 compatibility",
+          );
+        }
       },
     },
   },

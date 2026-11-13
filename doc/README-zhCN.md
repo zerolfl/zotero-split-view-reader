@@ -1,6 +1,6 @@
 # <img src="../addon/content/icons/svreader.svg" height="32" align="center" /> Split-View Reader（分屏阅读器）
 
-[![zotero target version](https://img.shields.io/badge/Zotero-8-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
+[![zotero target version](https://img.shields.io/badge/Zotero-8%2F9%2F10-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
 
 [English](../README.md) | [简体中文](./README-zhCN.md)
@@ -9,7 +9,7 @@
 
 ---
 
-**Split-View Reader（分屏阅读器）** 是一款适用于 [Zotero 8](https://www.zotero.org/) 的插件，支持并排阅读相同或不同的 PDF，并提供可选的主视图操作同步。
+**Split-View Reader（分屏阅读器）** 是一款适用于 [Zotero 8/9/10](https://www.zotero.org/) 的插件，支持并排阅读相同或不同的 PDF，并提供可选的主视图操作同步。
 
 <p align="center">
   <img src="example.png" width="1500" alt="示例" />
