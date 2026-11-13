@@ -21,6 +21,7 @@ import { SplitTabContextMenu } from "../platform/tabContextMenu";
 import { installCloseButton } from "../platform/readerToolbar";
 import { readerScrollbar } from "../platform/readerScrollbar";
 import { SplitReaderContextMenu } from "./splitView/readerContextMenu";
+import { SplitLibraryFlow } from "./splitView/libraryFlow";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -111,6 +112,29 @@ export class SplitViewFactory {
   });
   private static readerHost = new SplitReaderHost();
   private static pdfSelector = new PDFSelector();
+  private static libraryFlow = new SplitLibraryFlow({
+    selectPDF: (step, libraryID) =>
+      this.pdfSelector.select(
+        libraryID,
+        getString(
+          step === "first"
+            ? "splitview-select-first-pdf"
+            : "splitview-select-second-pdf",
+        ),
+      ),
+    getTabs: () => {
+      const win = Zotero.getMainWindow();
+      return (win as any).Zotero_Tabs ? tabsForWindow(win) : null;
+    },
+    getReader: (tabID) => Zotero.Reader.getByTabID(tabID) || null,
+    openReader: (itemID) => Zotero.Reader.open(itemID),
+    wait: (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    waitForReaderReady: (reader) => readerRuntime.waitForReaderReady(reader),
+    hasSplitState: (tabID) => this.stateMap.has(tabID),
+    splitSamePDF: (reader) => this.convertToSamePDFSplitView(reader),
+    splitDifferentPDF: (reader, item) => this.convertToSplitView(reader, item),
+  });
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
@@ -3323,96 +3347,6 @@ export class SplitViewFactory {
    * If the user cancels the second selection, the first PDF stays open as a normal tab.
    */
   private static async openSplitViewFromLibrary() {
-    // Step 1: select the first PDF (left side)
-    const firstPDF = await this.pdfSelector.select(
-      undefined,
-      getString("splitview-select-first-pdf"),
-    );
-    if (!firstPDF) return;
-
-    const win = Zotero.getMainWindow();
-    const Zotero_Tabs = tabsForWindow(win);
-
-    // Check if this PDF is already open in an existing tab (including split view tabs)
-    // This handles both normal tabs and split view tabs after Zotero restart
-    let existingTabID: string | null = null;
-    let isAlreadySplitView = false;
-
-    if (Zotero_Tabs) {
-      const tabs = Zotero_Tabs.list();
-
-      for (const tab of tabs) {
-        // Check if tab contains this PDF as left side
-        if (tab.data?.itemID === firstPDF.id) {
-          existingTabID = tab.id;
-          // Check if this tab is already a split view (has rightItemID)
-          if (tab.data?.rightItemID) {
-            isAlreadySplitView = true;
-          }
-          break;
-        }
-        // Also check split view data for right-side PDF
-        if (tab.data?.rightItemID === firstPDF.id) {
-          existingTabID = tab.id;
-          isAlreadySplitView = true;
-          break;
-        }
-      }
-    }
-
-    // If already in a split view tab, just switch to it and return
-    if (existingTabID && isAlreadySplitView) {
-      Zotero_Tabs.select(existingTabID);
-      return;
-    }
-
-    let reader: _ZoteroTypes.ReaderInstance | null = null;
-
-    if (existingTabID) {
-      // Switch to existing tab first
-      Zotero_Tabs.select(existingTabID);
-      // Wait for tab switch and reader initialization
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      // Get the reader after switching
-      reader = Zotero.Reader.getByTabID(existingTabID) || null;
-      if (!reader) {
-        // Tab might be unloaded, wait for it to load
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        reader = Zotero.Reader.getByTabID(existingTabID) || null;
-      }
-    }
-
-    if (!reader) {
-      // Open the first PDF in a new reader tab
-      reader = (await Zotero.Reader.open(firstPDF.id)) || null;
-    }
-
-    if (!reader) return;
-
-    // Check if this reader is already in split view mode (via stateMap)
-    if (this.stateMap.has(reader.tabID)) {
-      // Already in split view, no need to show second prompt
-      return;
-    }
-
-    // Wait for the reader to fully initialise
-    // For unloaded tabs, we need to wait longer and ensure the reader is ready
-    await readerRuntime.waitForReaderReady(reader);
-
-    // Step 2: select the second PDF (right side)
-    const secondPDF = await this.pdfSelector.select(
-      firstPDF.libraryID,
-      getString("splitview-select-second-pdf"),
-    );
-    if (!secondPDF) return; // User cancelled – leave the single PDF open
-
-    // Check if same PDF
-    const isSamePDF = secondPDF.id === reader.itemID;
-
-    if (isSamePDF) {
-      await this.convertToSamePDFSplitView(reader);
-    } else {
-      await this.convertToSplitView(reader, secondPDF);
-    }
+    await this.libraryFlow.open();
   }
 }
