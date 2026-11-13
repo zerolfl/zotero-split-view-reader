@@ -1,7 +1,17 @@
 import { config } from "../../package.json";
 import { SplitViewFactory } from "./splitView";
 import { getPref, setPref } from "../utils/prefs";
+import { getString } from "../utils/locale";
 import type { SplitTabsTitleMode } from "../utils/splitTabTitle";
+
+export function registerPreferencePane(): void {
+  Zotero.PreferencePanes.register({
+    pluginID: config.addonID,
+    src: rootURI + "content/preferences.xhtml",
+    label: getString("prefs-title"),
+    image: `chrome://${config.addonRef}/content/icons/svreader.svg`,
+  });
+}
 
 function isSplitTabsTitleMode(value: string): value is SplitTabsTitleMode {
   return (

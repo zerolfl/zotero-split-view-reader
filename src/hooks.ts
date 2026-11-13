@@ -1,14 +1,9 @@
-import {
-  BasicExampleFactory,
-  // HelperExampleFactory,
-  // KeyExampleFactory,
-  // PromptExampleFactory,
-  // UIExampleFactory,
-} from "./modules/examples";
 import { SplitViewFactory } from "./modules/splitView";
 import { initLocale } from "./utils/locale";
-import { registerPrefsScripts } from "./modules/preferenceScript";
-import { createZToolkit } from "./utils/ztoolkit";
+import {
+  registerPreferencePane,
+  registerPrefsScripts,
+} from "./modules/preferenceScript";
 
 async function onStartup() {
   await Promise.all([
@@ -26,17 +21,7 @@ async function onStartup() {
   SplitViewFactory.registerSplitTabTitleItemNotifier();
   SplitViewFactory.registerPromptCommands();
 
-  BasicExampleFactory.registerPrefs();
-
-  BasicExampleFactory.registerNotifier();
-
-  // Example code - commented out for Split-View Reader plugin
-  // KeyExampleFactory.registerShortcuts();
-  // await UIExampleFactory.registerExtraColumn();
-  // await UIExampleFactory.registerExtraColumnWithCustomCell();
-  // UIExampleFactory.registerItemPaneCustomInfoRow();
-  // UIExampleFactory.registerItemPaneSection();
-  // UIExampleFactory.registerReaderItemPaneSection();
+  registerPreferencePane();
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -48,9 +33,6 @@ async function onStartup() {
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
-  // Create ztoolkit for every window
-  addon.data.ztoolkit = createZToolkit();
-
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
@@ -78,26 +60,6 @@ function onShutdown(): void {
 }
 
 /**
- * Dispatcher for Notify events.
- */
-async function onNotify(
-  event: string,
-  type: string,
-  ids: Array<string | number>,
-  extraData: { [key: string]: any },
-) {
-  ztoolkit.log("notify", event, type, ids, extraData);
-  // Example code - commented out for Split-View Reader plugin
-  // if (
-  //   event == "select" &&
-  //   type == "tab" &&
-  //   extraData[ids[0]].type == "reader"
-  // ) {
-  //   BasicExampleFactory.exampleNotifierCallback();
-  // }
-}
-
-/**
  * Dispatcher for Preference UI events.
  * @param type event type
  * @param data event data
@@ -112,22 +74,10 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   }
 }
 
-// Stub functions retained so examples.ts references still compile.
-// These are no-ops for the Split-View Reader plugin.
-function onShortcuts(_type: string) {}
-function onDialogEvents(_type: string) {}
-
-// Add your hooks here. For element click, etc.
-// Keep in mind hooks only do dispatch. Don't add code that does real jobs in hooks.
-// Otherwise the code would be hard to read and maintain.
-
 export default {
   onStartup,
   onShutdown,
   onMainWindowLoad,
   onMainWindowUnload,
-  onNotify,
   onPrefsEvent,
-  onShortcuts,
-  onDialogEvents,
 };
