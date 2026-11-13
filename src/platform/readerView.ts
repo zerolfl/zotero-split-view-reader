@@ -18,6 +18,19 @@ function getPdfViewerFromReader(internalReader: any): any {
   }
 }
 
+function getPrimaryViewWindowFromBrowser(
+  browser: XULBrowserElement,
+): Window | null {
+  try {
+    const internalReader = readerRuntime.getInternalReaderFromBrowser(browser);
+    const iframeWindow = internalReader?._primaryView?._iframe?.contentWindow;
+    if (!iframeWindow) return null;
+    return ((iframeWindow as any).wrappedJSObject || iframeWindow) as Window;
+  } catch {
+    return null;
+  }
+}
+
 async function getViewStateFromReader(reader: any): Promise<any> {
   try {
     const internal = reader?._internalReader || reader;
@@ -211,6 +224,7 @@ function getViewerContainerFromBrowser(
 }
 
 export const readerView = {
+  getPrimaryViewWindowFromBrowser,
   getPdfViewerFromReader,
   getViewStateFromReader,
   getImmediateViewStateFromBrowser,

@@ -211,6 +211,23 @@ function getReaderForBrowser(browser: XULBrowserElement): any {
   }
 }
 
+function setSidebarOpen(browser: XULBrowserElement, open: boolean): boolean {
+  const reader = getInternalReaderFromBrowser(browser);
+  if (typeof reader?.toggleSidebar === "function") {
+    try {
+      reader.toggleSidebar(open);
+      return true;
+    } catch {
+      // Fall through to the view-level method if the Reader method fails.
+    }
+  }
+  if (typeof reader?._primaryView?.setSidebarOpen === "function") {
+    reader._primaryView.setSidebarOpen(open);
+    return true;
+  }
+  return false;
+}
+
 export const readerRuntime = {
   waitForBrowserLoad,
   waitForInternalReader,
@@ -221,4 +238,5 @@ export const readerRuntime = {
   waitForReaderReady,
   getInitializationPromise,
   getReaderForBrowser,
+  setSidebarOpen,
 };

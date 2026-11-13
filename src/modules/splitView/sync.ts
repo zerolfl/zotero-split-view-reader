@@ -197,13 +197,7 @@ export class SplitSync {
 
     const secondaryBrowser = isLeft ? state.rightBrowser : state.leftBrowser;
     try {
-      const reader =
-        readerRuntime.getInternalReaderFromBrowser(secondaryBrowser);
-      if (typeof reader?.toggleSidebar === "function") {
-        reader.toggleSidebar(open);
-      } else if (typeof reader?._primaryView?.setSidebarOpen === "function") {
-        reader._primaryView.setSidebarOpen(open);
-      }
+      readerRuntime.setSidebarOpen(secondaryBrowser, open);
     } catch {
       // Ignore errors from an unloading reader.
     }

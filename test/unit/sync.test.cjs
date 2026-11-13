@@ -95,6 +95,7 @@ function setup() {
   const readerRuntime = {
     isBrowserAlive: () => true,
     getInternalReaderFromBrowser: (browser) => browser.reader,
+    setSidebarOpen: (browser, open) => browser.reader.toggleSidebar?.(open),
   };
   const { SplitSync } = load(
     "src/modules/splitView/sync.ts",

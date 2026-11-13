@@ -1,5 +1,5 @@
 import type { SplitSide, SplitTabState } from "./types";
-import { readerRuntime } from "../../platform/readerRuntime";
+import { readerView } from "../../platform/readerView";
 import { contextPane as splitContextPane } from "../../platform/contextPane";
 import { getPref } from "../../utils/prefs";
 
@@ -51,15 +51,8 @@ export class SplitInteractions {
     if (!state) return;
 
     try {
-      const internalReader =
-        readerRuntime.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return;
-
-      const iframe = internalReader._primaryView?._iframe;
-      const iframeWin = iframe?.contentWindow;
-      if (!iframeWin) return;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
+      const wrappedWin = readerView.getPrimaryViewWindowFromBrowser(browser);
+      if (!wrappedWin) return;
       const doc = wrappedWin.document;
       if (!doc) return;
 

@@ -72,6 +72,43 @@ test("current browser state prefers the live PDF position and keeps cached metad
   assert.equal(state.lastReadAloudPosition.pageIndex, 0);
 });
 
+test("primary view window lookup unwraps the reader compartment", () => {
+  const firstBrowser = {};
+  const secondBrowser = {};
+  const firstWindow = { document: {} };
+  const secondWindow = { document: {} };
+  const firstWrappedWindow = { document: { id: "first" } };
+  const secondWrappedWindow = { document: { id: "second" } };
+  const view = runtime({
+    getInternalReaderFromBrowser: (browser) => ({
+      _primaryView: {
+        _iframe: {
+          contentWindow:
+            browser === firstBrowser
+              ? {
+                  wrappedJSObject: firstWrappedWindow,
+                  ...firstWindow,
+                }
+              : {
+                  wrappedJSObject: secondWrappedWindow,
+                  ...secondWindow,
+                },
+        },
+      },
+    }),
+  });
+
+  assert.equal(
+    view.getPrimaryViewWindowFromBrowser(firstBrowser),
+    firstWrappedWindow,
+  );
+  assert.equal(
+    view.getPrimaryViewWindowFromBrowser(secondBrowser),
+    secondWrappedWindow,
+  );
+  assert.equal(runtime().getPrimaryViewWindowFromBrowser({}), null);
+});
+
 test("state application clamps pages and drops offsets that belong to another page", async () => {
   const view = runtime();
   const { internal, applied } = reader(2);

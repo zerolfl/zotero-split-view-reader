@@ -84,9 +84,9 @@ function setup() {
       Zotero: { debug() {} },
     },
     {
-      "../../platform/readerRuntime": {
-        readerRuntime: {
-          getInternalReaderFromBrowser: (browser) => browser.reader,
+      "../../platform/readerView": {
+        readerView: {
+          getPrimaryViewWindowFromBrowser: () => rt.iframeWindow,
         },
       },
       "../../platform/contextPane": {
