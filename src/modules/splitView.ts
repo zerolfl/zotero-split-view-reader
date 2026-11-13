@@ -33,6 +33,7 @@ import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
+import { SplitScrollbar } from "./splitView/scrollbar";
 import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { SplitSessionRestore } from "./splitView/sessionRestore";
@@ -215,15 +216,32 @@ export class SplitViewFactory {
       this.primaryView.getEffectiveSide(state),
     sync: this.sync,
     trackEventListener: (...args) => this.trackEventListener(...args),
-    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
   });
   private static primaryView = new SplitPrimaryView({
     getState: (tabID) => this.stateMap.get(tabID) || null,
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
-    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     initSyncState: (tabID) => this.sync.initSyncState(tabID),
     startSyncPolling: (tabID) => this.sync.startSyncPolling(tabID),
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
+  });
+  private static splitScrollbar = new SplitScrollbar({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getTabIDs: () => this.stateMap.keys(),
+    getEffectivePrimarySide: (state) =>
+      this.primaryView.getEffectiveSide(state),
+    getColor: () => ({
+      red: getPref("primaryScrollbarR") ?? 255,
+      green: getPref("primaryScrollbarG") ?? 0,
+      blue: getPref("primaryScrollbarB") ?? 0,
+    }),
+    setPrimaryColor: (browser, color) =>
+      readerScrollbar.setPrimaryColor(browser, color),
+    registerObserver: (name, callback) =>
+      Zotero.Prefs.registerObserver(name, callback, true),
+    unregisterObserver: (id) => Zotero.Prefs.unregisterObserver(id),
+    debug: (message) => Zotero.debug(message),
   });
   private static readerHost = new SplitReaderHost();
   private static readerInitialization = new SplitReaderInitialization(
@@ -323,7 +341,7 @@ export class SplitViewFactory {
             this.sync.initSyncState(tabID);
             this.sync.startSyncPolling(tabID);
           }
-          this.updateScrollbarColors(tabID);
+          this.splitScrollbar.update(tabID);
         },
         500,
       ),
@@ -376,7 +394,7 @@ export class SplitViewFactory {
     setupZoomButtonListeners: (tabID, browser) =>
       this.sync.setupZoomButtonListeners(tabID, browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
-    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     updateContextPane: (tabID, win, itemID) =>
       splitContextPane.updateItem(tabID, win, itemID),
     bindAnnotations: (state) => bindSplitAnnotations(state),
@@ -402,7 +420,7 @@ export class SplitViewFactory {
     setupZoomButtonListeners: (tabID, browser) =>
       this.sync.setupZoomButtonListeners(tabID, browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
-    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     bindAnnotations: (state) => bindSplitAnnotations(state),
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
@@ -430,7 +448,7 @@ export class SplitViewFactory {
         state.rightBrowser,
         ratio,
       ),
-    updateScrollbarColors: (tabID) => this.updateScrollbarColors(tabID),
+    updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     writeSession: (tabID) => this.updateTabDataForSession(tabID),
     debug: (message) => Zotero.debug(message),
   });
@@ -464,12 +482,6 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
-  /** Preference observer IDs for scrollbar RGB - apply new color to open split view tabs */
-  private static scrollbarPrefObserverIDs: (symbol | null)[] = [
-    null,
-    null,
-    null,
-  ];
   /**
    * Look up state for a specific tab
    */
@@ -668,25 +680,7 @@ export class SplitViewFactory {
     const prefix = config.prefsPrefix;
     this.clearLegacySyncEnabledPref();
 
-    // primaryScrollbarR/G/B: re-apply scrollbar color to all split view tabs
-    const scrollbarPrefKeys: (keyof _ZoteroTypes.Prefs["PluginPrefsMap"])[] = [
-      "primaryScrollbarR",
-      "primaryScrollbarG",
-      "primaryScrollbarB",
-    ];
-    const onScrollbarPrefChange = () => {
-      for (const tabID of this.stateMap.keys()) {
-        this.updateScrollbarColors(tabID);
-      }
-    };
-    scrollbarPrefKeys.forEach((key, i) => {
-      const id = Zotero.Prefs.registerObserver(
-        `${prefix}.${key}`,
-        onScrollbarPrefChange,
-        true,
-      );
-      this.scrollbarPrefObserverIDs[i] = id;
-    });
+    this.splitScrollbar.registerObservers(prefix);
 
     this.tabTitles.registerPreferenceObserver(`${prefix}.splitTabsTitle`);
 
@@ -734,19 +728,7 @@ export class SplitViewFactory {
 
     this.tabNotifier.unregister();
 
-    // Unregister preference observers
-    this.scrollbarPrefObserverIDs.forEach((id, i) => {
-      if (id) {
-        try {
-          Zotero.Prefs.unregisterObserver(id);
-        } catch (e) {
-          Zotero.debug(
-            `Split view: unregisterAll - unregisterObserver(scrollbarPref[${i}]) failed: ${e}`,
-          );
-        }
-        this.scrollbarPrefObserverIDs[i] = null;
-      }
-    });
+    this.splitScrollbar.unregisterObservers();
     this.tabTitles.unregister();
     this.readAloud.unregister();
 
@@ -1100,40 +1082,6 @@ export class SplitViewFactory {
       },
       500,
     );
-  }
-
-  /**
-   * Inject CSS to change scrollbar color for a browser's PDF viewer.
-   * Red scrollbar indicates the primary window, gray for secondary.
-   */
-  /**
-   * Update scrollbar colors for both browsers based on current primary side
-   */
-  private static updateScrollbarColors(tabID: string) {
-    const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp) return;
-    const primarySide = this.primaryView.getEffectiveSide(state);
-
-    try {
-      // Only show a highlighted scrollbar while a primary view exists.
-      const color = primarySide
-        ? {
-            red: getPref("primaryScrollbarR") ?? 255,
-            green: getPref("primaryScrollbarG") ?? 0,
-            blue: getPref("primaryScrollbarB") ?? 0,
-          }
-        : null;
-      readerScrollbar.setPrimaryColor(
-        state.leftBrowser,
-        primarySide === "left" ? color : null,
-      );
-      readerScrollbar.setPrimaryColor(
-        state.rightBrowser,
-        primarySide === "right" ? color : null,
-      );
-    } catch (e) {
-      Zotero.debug(`Split view: updateScrollbarColors error: ${e}`);
-    }
   }
 
   /**
