@@ -6,7 +6,7 @@ import { annotationStore } from "../platform/annotationStore";
 import { reportAnnotationFailure } from "../platform/readerAnnotations";
 import { SplitSession } from "./splitView/session";
 import { TabHooks } from "../platform/tabHooks";
-import { tabsForWindow } from "../platform/tabs";
+import { setTabAudioStatus, tabsForWindow } from "../platform/tabs";
 import { attachmentState } from "../platform/attachmentState";
 import { readerView } from "../platform/readerView";
 import { readerRuntime } from "../platform/readerRuntime";
@@ -97,7 +97,7 @@ export class SplitViewFactory {
     pauseReader: (browser) =>
       this.readAloudCoordinator.pauseBrowser(browser, true),
     setAudioStatus: (tabID) =>
-      this.setSplitTabAudioStatus(tabID, { active: false, paused: false }),
+      setTabAudioStatus(tabID, { active: false, paused: false }),
     unloadBrowser: (browser) => readerRuntime.unloadBrowser(browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
     getMainWindow: () => Zotero.getMainWindow(),
@@ -142,7 +142,7 @@ export class SplitViewFactory {
     states: () => this.stateStore.values(),
     getState: (id) => this.stateStore.get(id),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
-    setAudioStatus: (id, status) => this.setSplitTabAudioStatus(id, status),
+    setAudioStatus: (id, status) => setTabAudioStatus(id, status),
     pauseOtherReaders: pauseNativeReaders,
   });
   private static readerBrowser = new SplitReaderBrowserAdapter({
@@ -674,18 +674,6 @@ export class SplitViewFactory {
     itemID: number,
   ) {
     this.session.prepareClose(tabID, itemID);
-  }
-
-  private static setSplitTabAudioStatus(tabID: string, status: any): void {
-    try {
-      const win = Zotero.getMainWindow();
-      const Zotero_Tabs = tabsForWindow(win);
-      if (typeof Zotero_Tabs?.setAudioStatus === "function") {
-        Zotero_Tabs.setAudioStatus(tabID, status);
-      }
-    } catch (e) {
-      Zotero.debug(`Split view: setSplitTabAudioStatus failed: ${e}`);
-    }
   }
 
   /**

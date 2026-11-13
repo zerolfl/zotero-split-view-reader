@@ -2,6 +2,18 @@ export function tabsForWindow(win: Window = Zotero.getMainWindow()): Tabs {
   return new Tabs((win as any).Zotero_Tabs);
 }
 
+export function setTabAudioStatus(
+  tabID: string,
+  status: any,
+  win: Window = Zotero.getMainWindow(),
+): void {
+  try {
+    tabsForWindow(win).setAudioStatus(tabID, status);
+  } catch (error) {
+    Zotero.debug(`Split view: setSplitTabAudioStatus failed: ${error}`);
+  }
+}
+
 export function observeReaderLoads(
   callback: (id: string, data: any) => void,
 ): () => void {
