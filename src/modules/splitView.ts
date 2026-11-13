@@ -18,6 +18,7 @@ import { SplitReadAloudService } from "./splitView/readAloud";
 import { SplitReadAloudCoordinator } from "./splitView/readAloudCoordinator";
 import { SplitTabTitleService } from "./splitView/tabTitles";
 import { SplitTabContextMenu } from "../platform/tabContextMenu";
+import { installCloseButton } from "../platform/readerToolbar";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -2087,100 +2088,25 @@ export class SplitViewFactory {
     if (!state || state.isCleaningUp || !readerRuntime.isBrowserAlive(browser))
       return;
 
-    try {
-      state.toolbarCloseObservers = state.toolbarCloseObservers.filter(
-        (entry) => {
-          if (entry.side !== side) return true;
-          try {
-            entry.observer.disconnect();
-          } catch {
-            // Ignore observers from an already-unloaded browser
-          }
-          return false;
-        },
-      );
+    state.toolbarCloseObservers = state.toolbarCloseObservers.filter(
+      (entry) => {
+        if (entry.side !== side) return true;
+        try {
+          entry.observer.disconnect();
+        } catch {
+          // Ignore observers from an already-unloaded browser
+        }
+        return false;
+      },
+    );
 
-      const win = browser.contentWindow;
-      if (!win) return;
-      const wrappedWin = (win as any).wrappedJSObject || win;
-      const doc = wrappedWin.document as Document | undefined;
-      if (!doc) return;
-
-      const buttonID = `split-view-close-${side}`;
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const self = this;
-
-      const addButton = () => {
-        const currentState = self.stateMap.get(tabID);
-        if (!currentState || currentState.isCleaningUp) return;
-        if (doc.getElementById(buttonID)) return;
-
-        const findButton = doc.querySelector(
-          ".toolbar .end .toolbar-button.find",
-        );
-        if (!findButton?.parentNode) return;
-
-        const button = doc.createElement("button");
-        button.id = buttonID;
-        button.className = "toolbar-button split-view-close-button";
-        button.setAttribute("type", "button");
-        button.setAttribute("tabindex", "-1");
-        button.setAttribute("title", this.getCloseViewMenuLabel());
-        button.setAttribute("aria-label", this.getCloseViewMenuLabel());
-
-        button.innerHTML = `
-          <svg class="split-view-close-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M11.2923 12L12 11.292L8.70711 7.99999L12 4.70796L11.2922 4L8.00011 7.29299L4.70798 4L4 4.70774L7.29311 7.99999L4 11.2922L4.70796 12L8.00011 8.70699L11.2923 12Z" fill="currentColor"></path>
-          </svg>
-        `;
-
-        button.addEventListener("mousedown", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        button.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          void self.revertToSingleReader(tabID, side);
-        });
-
-        findButton.after(button);
-      };
-
-      const injectStyle = () => {
-        if (doc.getElementById("split-view-close-button-style")) return;
-        const style = doc.createElement("style");
-        style.id = "split-view-close-button-style";
-        style.textContent = `
-          .toolbar-button.split-view-close-button {
-            flex: 0 0 28px;
-            color: var(--fill-secondary);
-          }
-
-          .toolbar-button.split-view-close-button .split-view-close-icon {
-            width: 16px;
-            height: 16px;
-            display: block;
-            pointer-events: none;
-          }
-        `;
-        doc.head?.appendChild(style);
-      };
-
-      injectStyle();
-      addButton();
-
-      const observer = new win.MutationObserver(() => addButton());
-      const observerTarget =
-        doc.getElementById("reader-ui") || doc.documentElement;
-      observer.observe(observerTarget, {
-        childList: true,
-        subtree: true,
-      });
-      state.toolbarCloseObservers.push({ side, observer });
-    } catch (e) {
-      Zotero.debug(`Split view: installToolbarCloseButton failed: ${e}`);
-    }
+    const observer = installCloseButton(browser, {
+      side,
+      label: this.getCloseViewMenuLabel(),
+      isActive: () => this.hasActiveSplitState(tabID),
+      onClose: () => void this.revertToSingleReader(tabID, side),
+    });
+    if (observer) state.toolbarCloseObservers.push({ side, observer });
   }
 
   /**

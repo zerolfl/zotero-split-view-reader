@@ -142,6 +142,27 @@ describe("split reader integration", function () {
     assert.notEqual(state.leftBrowser, state.rightBrowser);
   });
 
+  it("adds a localized close button beside each reader's find control", async function () {
+    const state = await open(false);
+    for (const side of ["left", "right"] as const) {
+      const browser = state[`${side}Browser`];
+      const document = (browser.contentWindow as any).wrappedJSObject.document;
+      const findButton = document.querySelector(
+        ".toolbar .end .toolbar-button.find",
+      );
+      const closeButton = document.getElementById(`split-view-close-${side}`);
+
+      assert.ok(findButton);
+      assert.ok(closeButton);
+      assert.strictEqual(findButton.nextElementSibling, closeButton);
+      assert.equal(
+        closeButton.getAttribute("aria-label"),
+        factory.getCloseViewMenuLabel(),
+      );
+      assert.ok(document.getElementById("split-view-close-button-style"));
+    }
+  });
+
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
     const state = await open(true);
     factory.setPrimarySide(state.tabID, null);
