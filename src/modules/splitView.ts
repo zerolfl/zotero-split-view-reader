@@ -10,6 +10,7 @@ import { setTabAudioStatus, tabsForWindow } from "../platform/tabs";
 import { attachmentState } from "../platform/attachmentState";
 import { readerView } from "../platform/readerView";
 import { readerRuntime } from "../platform/readerRuntime";
+import { readerApi } from "../platform/readerApi";
 import { contextPane as splitContextPane } from "../platform/contextPane";
 import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
@@ -110,9 +111,8 @@ export class SplitViewFactory {
   });
   private static separateTargets = new SeparateViewTargets({
     getTabs: () => tabsForWindow(Zotero.getMainWindow()),
-    getReader: (tabID) => Zotero.Reader.getByTabID(tabID),
-    openReader: (itemID, options) =>
-      Zotero.Reader.open(itemID, undefined, options),
+    getReader: (tabID) => readerApi.getByTabID(tabID),
+    openReader: (itemID, options) => readerApi.open(itemID, undefined, options),
     waitForReaderReady: (reader, maxWaitMs) =>
       readerRuntime.waitForReaderReady(reader, maxWaitMs),
     applyViewState: (reader, viewState) =>
@@ -473,7 +473,7 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static sessionRestore = new SplitSessionRestore({
-    getReader: (tabID) => Zotero.Reader.getByTabID(tabID) || null,
+    getReader: (tabID) => readerApi.getByTabID(tabID),
     getInitializationPromise: (reader) =>
       readerRuntime.getInitializationPromise(reader),
     hasState: (tabID) => this.stateStore.has(tabID),
@@ -509,8 +509,8 @@ export class SplitViewFactory {
       const win = Zotero.getMainWindow();
       return (win as any).Zotero_Tabs ? tabsForWindow(win) : null;
     },
-    getReader: (tabID) => Zotero.Reader.getByTabID(tabID) || null,
-    openReader: (itemID) => Zotero.Reader.open(itemID),
+    getReader: (tabID) => readerApi.getByTabID(tabID),
+    openReader: (itemID) => readerApi.open(itemID),
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
     waitForReaderReady: (reader) => readerRuntime.waitForReaderReady(reader),
@@ -642,7 +642,7 @@ export class SplitViewFactory {
     commandPalette.register(win, async () => {
       const tabs = tabsForWindow(win);
       const reader = tabs?.selectedID
-        ? Zotero.Reader.getByTabID(tabs.selectedID)
+        ? readerApi.getByTabID(tabs.selectedID)
         : null;
       if (reader) await this.handleSplitView(reader);
       else await this.openSplitViewFromLibrary();

@@ -1,4 +1,5 @@
 import { tabsForWindow } from "./tabs";
+import { readerApi } from "./readerApi";
 interface ReaderTab {
   id: string;
   type: string;
@@ -25,7 +26,7 @@ export function getOpenReaderAttachmentIDs(): number[] {
       if (id) ids.add(id);
     }
     if (!tab.data?.itemID) {
-      const reader = Zotero.Reader.getByTabID(tab.id);
+      const reader = readerApi.getByTabID(tab.id);
       if (reader?.itemID) ids.add(reader.itemID);
     }
   }

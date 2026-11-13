@@ -54,6 +54,7 @@ function searchRuntime() {
   };
   const registry = load("src/platform/readerRegistry.ts", globals, {
     "./tabs": load("src/platform/tabs.ts", globals),
+    "./readerApi": { readerApi: { getByTabID: () => null } },
   });
   const search = load("src/modules/pdfSelector/search.ts", globals, {
     "../../platform/readerRegistry": registry,
