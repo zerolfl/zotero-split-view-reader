@@ -34,6 +34,7 @@ import { SplitViewCreationService } from "./splitView/creation";
 import { SplitViewConversionService } from "./splitView/conversion";
 import { SplitViewShutdown } from "./splitView/shutdown";
 import { SplitTabResourceTracker } from "./splitView/resourceTracker";
+import { SplitTabStateStore } from "./splitView/stateStore";
 import { SplitReaderEntryFlow } from "./splitView/readerEntryFlow";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
@@ -51,8 +52,8 @@ import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
 
 export class SplitViewFactory {
-  /** Per-tab split view states. Each tab can independently have its own split view. */
-  private static stateMap: Map<string, SplitTabState> = new Map();
+  /** Per-tab split states are owned by the registry, not by the controller. */
+  private static stateStore = new SplitTabStateStore();
   private static notifications = new SplitViewNotifications({
     getString: (key, options) =>
       options
@@ -72,7 +73,7 @@ export class SplitViewFactory {
     },
   });
   private static tabNotifier = new SplitTabNotifier({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getActiveParentItemID: (state) => this.getActiveParentItemID(state),
     showForSplitView: (win) => splitContextPane.showForSplitView(win),
     updateContextPane: (tabID, win, itemID) =>
@@ -88,10 +89,10 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static tabCleanup = new SplitTabCleanup({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
-    removeState: (tabID) => this.stateMap.delete(tabID),
-    hasState: (tabID) => this.stateMap.has(tabID),
-    hasAnyState: () => this.stateMap.size > 0,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
+    removeState: (tabID) => this.stateStore.remove(tabID),
+    hasState: (tabID) => this.stateStore.has(tabID),
+    hasAnyState: () => this.stateStore.hasAny(),
     saveState: (state) => this.tabNotifier.save(state),
     pauseReader: (browser) =>
       this.readAloudCoordinator.pauseBrowser(browser, true),
@@ -120,7 +121,7 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static lifecycle = new SplitViewLifecycle({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getTabs: () => tabsForWindow(Zotero.getMainWindow()),
     targets: this.separateTargets,
     captureViewState: (browser) =>
@@ -134,18 +135,18 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static tabTitles = new SplitTabTitleService({
-    getStates: () => this.stateMap.values(),
-    getState: (id) => this.stateMap.get(id),
+    getStates: () => this.stateStore.values(),
+    getState: (id) => this.stateStore.get(id),
   });
   private static readAloudCoordinator = new SplitReadAloudCoordinator({
-    states: () => this.stateMap.values(),
-    getState: (id) => this.stateMap.get(id),
+    states: () => this.stateStore.values(),
+    getState: (id) => this.stateStore.get(id),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
     setAudioStatus: (id, status) => this.setSplitTabAudioStatus(id, status),
     pauseOtherReaders: pauseNativeReaders,
   });
   private static readerBrowser = new SplitReaderBrowserAdapter({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getReaderForBrowser: (browser) =>
       readerRuntime.getReaderForBrowser(browser),
     closeReader: (reader) => readerRuntime.closeReaderWithoutClosingTab(reader),
@@ -155,9 +156,7 @@ export class SplitViewFactory {
   private static tabHooks = new TabHooks({
     hasSplit: (id) => this.hasActiveSplitState(id),
     findRightItem: (itemID) =>
-      [...this.stateMap.values()].find(
-        (state) => state.rightItemID === itemID && !state.isCleaningUp,
-      )?.tabID || null,
+      this.stateStore.findByRightItem(itemID)?.tabID || null,
     getTitle: (tab) => this.tabTitles.getTitleForTab(tab),
     toggleAudio: (id) => this.readAloudCoordinator.toggleActive(id),
     pauseSplitAudio: () => this.readAloudCoordinator.pauseAll(),
@@ -172,13 +171,13 @@ export class SplitViewFactory {
         ? getString(key as Parameters<typeof getString>[0], options as any)
         : getString(key as Parameters<typeof getString>[0]),
     getAddonRef: () => addon.data.config.addonRef,
-    getState: (id) => this.stateMap.get(id) ?? null,
+    getState: (id) => this.stateStore.get(id) ?? null,
     getPrimaryMenuConfig: (state, side) =>
       this.primaryView.getMenuConfig(state, side),
   });
   private static readerContextMenu = new SplitReaderContextMenu({
     isAlive: () => !!addon.data.alive,
-    getState: (id) => this.stateMap.get(id) ?? null,
+    getState: (id) => this.stateStore.get(id) ?? null,
     getReaderSide: (id, reader) =>
       this.readAloudCoordinator.getReaderSide(id, reader as any),
     getPrimaryMenuConfig: (state, side) =>
@@ -209,11 +208,11 @@ export class SplitViewFactory {
     (id) => this.hasActiveSplitState(id),
   );
   private static layout = new SplitLayout(
-    (id) => this.stateMap.get(id),
+    (id) => this.stateStore.get(id),
     (state) => this.session.write(state),
   );
   private static splitReaderTab = new SplitReaderTabAdapter({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getInternalReader: (browser) =>
       readerRuntime.getInternalReaderFromBrowser(browser),
     setContextPaneOpen: (browser, open) =>
@@ -223,7 +222,7 @@ export class SplitViewFactory {
     Zotero.getMainWindow(),
   );
   private static sync = new SplitSync({
-    getState: (id) => this.stateMap.get(id),
+    getState: (id) => this.stateStore.get(id),
     getEffectivePrimarySide: (state) =>
       this.primaryView.getEffectiveSide(state),
     getMainWindow: () => Zotero.getMainWindow(),
@@ -234,7 +233,7 @@ export class SplitViewFactory {
       this.notifications.showPositionSynced(side, result),
   });
   private static interactions = new SplitInteractions({
-    getState: (tabID) => this.stateMap.get(tabID),
+    getState: (tabID) => this.stateStore.get(tabID),
     getEffectivePrimarySide: (state) =>
       this.primaryView.getEffectiveSide(state),
     sync: this.sync,
@@ -243,7 +242,7 @@ export class SplitViewFactory {
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
   });
   private static primaryView = new SplitPrimaryView({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     initSyncState: (tabID) => this.sync.initSyncState(tabID),
@@ -251,8 +250,8 @@ export class SplitViewFactory {
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
   });
   private static splitScrollbar = new SplitScrollbar({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
-    getTabIDs: () => this.stateMap.keys(),
+    getState: (tabID) => this.stateStore.get(tabID) || null,
+    getTabIDs: () => this.stateStore.keys(),
     getEffectivePrimarySide: (state) =>
       this.primaryView.getEffectiveSide(state),
     getColor: () => ({
@@ -268,7 +267,7 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static delayedSetup = new SplitViewDelayedSetup({
-    getState: (tabID) => this.stateMap.get(tabID),
+    getState: (tabID) => this.stateStore.get(tabID),
     trackTimeout: (...args) => this.resourceTracker.trackTimeout(...args),
     setupResizeListener: (tabID, win) =>
       this.interactions.setupResizeListener(tabID, win),
@@ -287,7 +286,7 @@ export class SplitViewFactory {
   });
   private static readerHost = new SplitReaderHost();
   private static readerToolbar = new SplitReaderToolbar({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
     hasActiveSplitState: (tabID) => this.hasActiveSplitState(tabID),
     getCloseLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
@@ -297,7 +296,7 @@ export class SplitViewFactory {
   private static readerInitialization = new SplitReaderInitialization(
     this.readerHost,
     {
-      getState: (tabID) => this.stateMap.get(tabID) || null,
+      getState: (tabID) => this.stateStore.get(tabID) || null,
       getReadAloudConfig: (browser, ftl, onStatus) =>
         this.readAloud.getReaderConfig(browser, ftl, onStatus),
       handleReadAloudStatus: (tabID, browser, status) =>
@@ -326,7 +325,7 @@ export class SplitViewFactory {
         if (!contextPane) return;
         contextPane.togglePane();
         setTimeout(() => {
-          const state = this.stateMap.get(tabID);
+          const state = this.stateStore.get(tabID);
           if (!state?.rightBrowser) return;
           const isOpen = !((win as any).ZoteroContextPane?.collapsed ?? true);
           splitContextPane.setReaderOpen(state.rightBrowser, isOpen);
@@ -349,7 +348,7 @@ export class SplitViewFactory {
         return undefined;
       }
     },
-    setState: (tabID, state) => this.stateMap.set(tabID, state),
+    setState: (tabID, state) => this.stateStore.set(tabID, state),
     setupShell: (tabID, state, shell, win) => {
       this.layout.setupResizerDrag(
         tabID,
@@ -393,8 +392,8 @@ export class SplitViewFactory {
   private static readerPopupMenu = new SplitReaderPopupMenu({
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
     getMainWindow: () => Zotero.getMainWindow(),
-    getStates: () => this.stateMap.entries(),
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getStates: () => this.stateStore.entries(),
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getString: (key, options) => this.menuPresentation.getString(key, options),
     getIconURI: (name) => this.menuPresentation.getIconURI(name),
     setMenuItemIcon: (item, uri) =>
@@ -422,7 +421,7 @@ export class SplitViewFactory {
     schedule: (callback) => setTimeout(callback),
   });
   private static pdfSwap = new PDFSwapService({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     captureViewState: (browser) =>
       readerView.getCurrentViewStateFromBrowser(browser),
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
@@ -448,7 +447,7 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static pdfReplacement = new PDFReplacementService({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
     selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
@@ -476,14 +475,14 @@ export class SplitViewFactory {
     getReader: (tabID) => Zotero.Reader.getByTabID(tabID) || null,
     getInitializationPromise: (reader) =>
       readerRuntime.getInitializationPromise(reader),
-    hasState: (tabID) => this.stateMap.has(tabID),
+    hasState: (tabID) => this.stateStore.has(tabID),
     itemExists: (itemID) => Zotero.Items.exists(itemID),
     getItem: (itemID) => Zotero.Items.get(itemID) || null,
     convertSamePDF: (reader, data) =>
       this.conversion.convertSamePDF(reader, data),
     convertDifferentPDF: (reader, item, data) =>
       this.conversion.convertDifferentPDF(reader, item, data),
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     updateBrowserFlex: (state, ratio) =>
       this.layout.updateBrowserFlex(
         state.leftBrowser,
@@ -514,13 +513,13 @@ export class SplitViewFactory {
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
     waitForReaderReady: (reader) => readerRuntime.waitForReaderReady(reader),
-    hasSplitState: (tabID) => this.stateMap.has(tabID),
+    hasSplitState: (tabID) => this.stateStore.has(tabID),
     splitSamePDF: (reader) => this.conversion.convertSamePDF(reader),
     splitDifferentPDF: (reader, item) =>
       this.conversion.convertDifferentPDF(reader, item),
   });
   private static readerEntryFlow = new SplitReaderEntryFlow({
-    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getState: (tabID) => this.stateStore.get(tabID) || null,
     cleanup: (tabID) => this.cleanupTab(tabID),
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -533,11 +532,11 @@ export class SplitViewFactory {
   private static shutdown = new SplitViewShutdown({
     disposePDFSelector: () => this.pdfSelector.dispose(),
     unregisterReaderContextMenu: () => this.readerContextMenu.unregister(),
-    getStates: () => this.stateMap.values(),
+    getStates: () => this.stateStore.values(),
     saveAll: (states) => this.tabNotifier.saveAll(states),
-    getTabIDs: () => this.stateMap.keys(),
+    getTabIDs: () => this.stateStore.keys(),
     cleanupTabResources: (tabID) => this.cleanupTabResources(tabID),
-    clearStates: () => this.stateMap.clear(),
+    clearStates: () => this.stateStore.clear(),
     unregisterSession: () => this.session.unregister(),
     unregisterTabNotifier: () => this.tabNotifier.unregister(),
     unregisterScrollbarObservers: () =>
@@ -552,7 +551,7 @@ export class SplitViewFactory {
     debug: (message) => Zotero.debug(message),
   });
   private static readAloud = new SplitReadAloudService({
-    states: () => this.stateMap.values(),
+    states: () => this.stateStore.values(),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
@@ -561,7 +560,7 @@ export class SplitViewFactory {
     tabID: string | null | undefined,
   ): boolean {
     if (!tabID) return false;
-    const state = this.stateMap.get(tabID);
+    const state = this.stateStore.get(tabID);
     return !!state && !state.isCleaningUp;
   }
 
@@ -576,7 +575,7 @@ export class SplitViewFactory {
   }
 
   private static showInLibraryForActiveSide(tabID: string, win: Window): void {
-    const state = this.stateMap.get(tabID);
+    const state = this.stateStore.get(tabID);
     if (!state || state.isCleaningUp) return;
 
     const itemID = this.getActiveItemID(state);
@@ -667,7 +666,7 @@ export class SplitViewFactory {
     await this.sessionRestore.restore(tabID, savedData);
   }
   private static updateTabDataForSession(tabID: string) {
-    const state = this.stateMap.get(tabID);
+    const state = this.stateStore.get(tabID);
     if (state) this.session.write(state);
   }
   private static prepareTabDataForSingleReaderClose(
@@ -796,7 +795,7 @@ export class SplitViewFactory {
    * Close split tab
    */
   private static closeSplitTab(tabID: string) {
-    const state = this.stateMap.get(tabID);
+    const state = this.stateStore.get(tabID);
     if (!state) return;
 
     this.cleanupTab(tabID);
@@ -817,7 +816,7 @@ export class SplitViewFactory {
    * Note: Polling removed - tab notifier handles tab selection events
    */
   private static setupContextPane(tabID: string, win: Window) {
-    const state = this.stateMap.get(tabID);
+    const state = this.stateStore.get(tabID);
     if (!state) return;
 
     // Initialize immediately

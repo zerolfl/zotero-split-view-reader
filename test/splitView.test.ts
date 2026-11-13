@@ -40,7 +40,7 @@ describe("split reader integration", function () {
 
   afterEach(async function () {
     Zotero.logError = logError;
-    for (const tabID of [...factory.stateMap.keys()])
+    for (const tabID of [...factory.stateStore.keys()])
       factory.closeSplitTab(tabID);
     const tabs = Zotero.getMainWindow().Zotero_Tabs;
     for (const tab of [...(tabs as any)._tabs]) {
@@ -66,7 +66,7 @@ describe("split reader integration", function () {
     await readerRuntime.waitForReaderReady(reader);
     if (samePDF) await factory.conversion.convertSamePDF(reader);
     else await factory.conversion.convertDifferentPDF(reader, right);
-    const state = factory.stateMap.get(reader!.tabID);
+    const state = factory.stateStore.get(reader!.tabID);
     assert.ok(state);
     await Zotero.Promise.delay(700);
     return state;
@@ -223,7 +223,7 @@ describe("split reader integration", function () {
     await readerRuntime.waitForReaderReady(ordinary);
     tabs.setTabData(ordinary!.tabID, saved);
     await factory.restoreSplitViewFromSession(ordinary!.tabID, saved);
-    const restored = factory.stateMap.get(ordinary!.tabID);
+    const restored = factory.stateStore.get(ordinary!.tabID);
     assert.strictEqual(restored.primarySide, null);
     assert.equal(restored.activeSide, "right");
     assert.equal(restored.splitRatio, 0.35);
@@ -397,7 +397,7 @@ describe("split reader integration", function () {
 
     await factory.revertToSingleReader(state.tabID, "left");
 
-    assert.isUndefined(factory.stateMap.get(state.tabID));
+    assert.isUndefined(factory.stateStore.get(state.tabID));
     const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
     const readers = tabs.filter(
       (tab: any) =>
@@ -438,7 +438,7 @@ describe("split reader integration", function () {
 
     await factory.revertToSingleReader(state.tabID, "left");
 
-    assert.isUndefined(factory.stateMap.get(state.tabID));
+    assert.isUndefined(factory.stateStore.get(state.tabID));
     const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
     const readers = tabs.filter((tab: any) => tab.data?.itemID === left.id);
     assert.lengthOf(readers, 1);
@@ -514,7 +514,7 @@ describe("split reader integration", function () {
 
     await factory.separateViews(state.tabID, "right");
 
-    assert.isUndefined(factory.stateMap.get(state.tabID));
+    assert.isUndefined(factory.stateStore.get(state.tabID));
     assert.strictEqual(
       Zotero.Reader.getByTabID(existingLeft!.tabID),
       existingLeft,
@@ -566,7 +566,7 @@ describe("split reader integration", function () {
 
     await factory.separateViews(state.tabID, "right");
 
-    assert.isUndefined(factory.stateMap.get(state.tabID));
+    assert.isUndefined(factory.stateStore.get(state.tabID));
     const readers = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs.filter(
       (tab: any) => tab.data?.itemID === left.id,
     );
