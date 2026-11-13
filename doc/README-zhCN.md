@@ -5,6 +5,8 @@
 
 [English](../README.md) | [简体中文](./README-zhCN.md)
 
+开发维护：[维护指南](maintenance.md)、[Zotero API 清单](zotero-api.md)、[模板迁移记录](template-migration.md)。
+
 ---
 
 **Split-View Reader（分屏阅读器）** 是一款适用于 [Zotero 8](https://www.zotero.org/) 的插件，支持并排阅读相同或不同的 PDF，并提供可选的主视图操作同步。
