@@ -62,6 +62,9 @@ export async function saveReadAloudEnabledVoices(voices: any): Promise<void> {
 export function syncEnabledVoicesToNativeReaders(voices: any): void {
   for (const reader of (Zotero.Reader as any)._readers || []) {
     try {
+      const internalReader = reader?._internalReader;
+      if (typeof internalReader?.setReadAloudEnabledVoices !== "function")
+        continue;
       const result = reader?._handleReadAloudEnabledVoicesChange?.(voices);
       Promise.resolve(result).catch((error) => Zotero.logError(error));
     } catch (error) {

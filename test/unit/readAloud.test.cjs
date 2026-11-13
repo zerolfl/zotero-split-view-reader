@@ -91,6 +91,30 @@ test("pausing native readers skips unsupported readers and reports failures", ()
   assert.deepEqual(errors, ["reader closing"]);
 });
 
+test("enabled voice sync skips native readers without the backing setter", () => {
+  const { platform, globals } = runtime();
+  const voices = { en: { standard: ["voice"] } };
+  let unsupportedCalls = 0;
+  let supportedCalls = 0;
+  globals.Zotero.Reader._readers = [
+    {
+      _handleReadAloudEnabledVoicesChange: () => unsupportedCalls++,
+    },
+    {
+      _internalReader: { setReadAloudEnabledVoices() {} },
+      _handleReadAloudEnabledVoicesChange: (value) => {
+        assert.strictEqual(value, voices);
+        supportedCalls++;
+      },
+    },
+  ];
+
+  platform.syncEnabledVoicesToNativeReaders(voices);
+
+  assert.equal(unsupportedCalls, 0);
+  assert.equal(supportedCalls, 1);
+});
+
 test("all remote operations reject in the content realm on API failure", async () => {
   const { platform, api, targetWindow } = runtime();
   for (const key of Object.keys(api)) {
