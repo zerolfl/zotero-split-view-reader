@@ -290,6 +290,69 @@ describe("split reader integration", function () {
     assert.ok(Zotero.Items.getByLibraryAndKey(left.libraryID, note.id));
   });
 
+  it("swaps different PDFs together with their view positions and session data", async function () {
+    const state = await open(false);
+    factory.setPrimarySide(state.tabID, null);
+    factory.activateSide(state.tabID, "right", Zotero.getMainWindow());
+
+    const oldLeft = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const oldRight = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(oldLeft, {
+      pageIndex: 1,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(oldRight, {
+      pageIndex: 0,
+      scale: 100,
+    });
+    await Zotero.Promise.delay(400);
+
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(oldLeft).pageIndex,
+      1,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(oldRight).pageIndex,
+      0,
+    );
+    assert.equal(
+      readerView.getCurrentViewStateFromBrowser(state.leftBrowser).pageIndex,
+      1,
+    );
+    assert.equal(
+      readerView.getCurrentViewStateFromBrowser(state.rightBrowser).pageIndex,
+      0,
+    );
+    await factory.swapPDFs(state.tabID);
+
+    assert.equal(state.leftItemID, right.id);
+    assert.equal(state.rightItemID, left.id);
+    assert.strictEqual(state.primarySide, null);
+    assert.equal(state.activeSide, "right");
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.leftBrowser).pageIndex,
+      0,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromBrowser(state.rightBrowser).pageIndex,
+      1,
+    );
+
+    const data = (Zotero.getMainWindow().Zotero_Tabs as any)._getTab(
+      state.tabID,
+    ).tab.data;
+    assert.equal(data.leftItemID, right.id);
+    assert.equal(data.rightItemID, left.id);
+    assert.equal(data.leftViewState.pageIndex, 0);
+    assert.equal(data.rightViewState.pageIndex, 1);
+    assert.strictEqual(data.primarySide, null);
+    assert.equal(data.activeSide, "right");
+  });
+
   it("rebinds annotation and selection sync after replacing readers for a swap", async function () {
     const state = await open(true);
     await factory.swapPDFs(state.tabID);

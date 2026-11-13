@@ -932,7 +932,7 @@ export class SplitViewFactory {
   /**
    * Swap the PDFs between left and right panels.
    * Recreates both browser instances with swapped items and view states.
-   * Primary and active side states follow the swap.
+   * Primary and active side settings remain attached to their panes.
    */
   private static async swapPDFs(tabID: string) {
     const state = this.stateMap.get(tabID);
