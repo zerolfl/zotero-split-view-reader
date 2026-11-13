@@ -409,6 +409,43 @@ describe("split reader integration", function () {
     );
   });
 
+  it("closing one same-PDF side keeps that side's independent position", async function () {
+    const state = await open(true);
+    factory.setPrimarySide(state.tabID, null);
+    const leftReader = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const rightReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(leftReader, {
+      pageIndex: 0,
+      scale: 100,
+    });
+    await readerView.applyViewStateToReader(rightReader, {
+      pageIndex: 1,
+      scale: 125,
+    });
+
+    await factory.revertToSingleReader(state.tabID, "left");
+
+    assert.isUndefined(factory.stateMap.get(state.tabID));
+    const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
+    const readers = tabs.filter((tab: any) => tab.data?.itemID === left.id);
+    assert.lengthOf(readers, 1);
+    const keptReader = Zotero.Reader.getByTabID(readers[0].id);
+    assert.ok(keptReader);
+    await readerRuntime.waitForReaderReady(keptReader);
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(keptReader).pageIndex,
+      1,
+    );
+    assert.equal(
+      readerView.getImmediateViewStateFromReader(keptReader).scale,
+      125,
+    );
+  });
+
   it("separates different PDFs into their existing reader tabs with each position", async function () {
     const state = await open(false);
     factory.setPrimarySide(state.tabID, null);
