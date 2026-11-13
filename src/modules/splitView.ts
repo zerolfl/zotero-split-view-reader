@@ -1,3 +1,6 @@
+import { attachmentState } from "../platform/attachmentState";
+import { readerView } from "../platform/readerView";
+import { readerRuntime } from "../platform/readerRuntime";
 import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
 import type { SeparateViewTarget, SplitTabState } from "./splitView/types";
@@ -16,7 +19,7 @@ export class SplitViewFactory {
   private static pdfSelector = new PDFSelector();
   private static readAloud = new SplitReadAloudService({
     states: () => this.stateMap.values(),
-    getReader: (browser) => this.getInternalReaderFromBrowser(browser),
+    getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
     isActive: (browser) => !!this.getActiveSplitReaderInfoByBrowser(browser),
   });
   /** Global tab notifier ID - shared across all split view tabs */
@@ -766,10 +769,10 @@ export class SplitViewFactory {
     const state = this.stateMap.get(tabID);
     if (!state || state.isCleaningUp) return;
     try {
-      state.leftViewerContainer = this.getViewerContainerFromBrowser(
+      state.leftViewerContainer = readerView.getViewerContainerFromBrowser(
         state.leftBrowser,
       );
-      state.rightViewerContainer = this.getViewerContainerFromBrowser(
+      state.rightViewerContainer = readerView.getViewerContainerFromBrowser(
         state.rightBrowser,
       );
     } catch (e) {
@@ -1270,14 +1273,14 @@ export class SplitViewFactory {
         let leftCurrentState: any = null;
         let rightCurrentState: any = null;
         try {
-          leftCurrentState = this.getCurrentViewStateFromBrowser(
+          leftCurrentState = readerView.getCurrentViewStateFromBrowser(
             state.leftBrowser,
           );
         } catch {
           // Browser may be dead
         }
         try {
-          rightCurrentState = this.getCurrentViewStateFromBrowser(
+          rightCurrentState = readerView.getCurrentViewStateFromBrowser(
             state.rightBrowser,
           );
         } catch {
@@ -1285,11 +1288,11 @@ export class SplitViewFactory {
         }
         // Fire and forget - async save
         Promise.all([
-          this.saveViewStateToDisk(
+          attachmentState.saveViewStateToDisk(
             state.leftItemID,
             leftCurrentState || state.leftViewState,
           ),
-          this.saveViewStateToDisk(
+          attachmentState.saveViewStateToDisk(
             state.rightItemID,
             rightCurrentState || state.rightViewState,
           ),
@@ -1694,7 +1697,7 @@ export class SplitViewFactory {
     paused = true,
   ): void {
     try {
-      const reader = this.getInternalReaderFromBrowser(browser);
+      const reader = readerRuntime.getInternalReaderFromBrowser(browser);
       reader?.toggleReadAloudPaused?.(paused);
     } catch (e) {
       Zotero.debug(`Split view: pauseReadAloudInBrowser failed: ${e}`);
@@ -1861,7 +1864,9 @@ export class SplitViewFactory {
       this.getReadAloudTargetSide(state),
     );
     try {
-      this.getInternalReaderFromBrowser(browser)?.toggleReadAloudPaused?.();
+      readerRuntime
+        .getInternalReaderFromBrowser(browser)
+        ?.toggleReadAloudPaused?.();
     } catch (e) {
       Zotero.debug(`Split view: toggleActiveReadAloud failed: ${e}`);
     }
@@ -1912,9 +1917,9 @@ export class SplitViewFactory {
 
     // Close the old reader instance associated with this browser.
     // This removes it from Zotero.Reader._readers and prevents orphaned readers.
-    const oldReader = this.getReaderForBrowser(oldBrowser);
+    const oldReader = readerRuntime.getReaderForBrowser(oldBrowser);
     if (oldReader) {
-      await this.closeReaderWithoutClosingTab(oldReader);
+      await readerRuntime.closeReaderWithoutClosingTab(oldReader);
     }
     this.clearReadAloudStateForSide(state, side);
 
@@ -1971,20 +1976,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Find the Zotero Reader instance associated with a browser element.
-   * Searches Zotero.Reader._readers for a reader whose _iframe matches the browser.
-   */
-  private static getReaderForBrowser(browser: XULBrowserElement): any {
-    try {
-      const readers = (Zotero.Reader as any)._readers;
-      if (!readers || !Array.isArray(readers)) return null;
-      return readers.find((r: any) => r._iframe === browser) || null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Select and load a new PDF in the secondary (non-primary) window
    */
   /**
@@ -2034,7 +2025,8 @@ export class SplitViewFactory {
       }
 
       // Get the view state for the new PDF
-      const newViewState = await this.getStoredViewState(selectedPDF);
+      const newViewState =
+        await attachmentState.getStoredViewState(selectedPDF);
 
       // Get the appropriate popupset
       const popupset =
@@ -2149,14 +2141,14 @@ export class SplitViewFactory {
       let leftCurrentState: any = null;
       let rightCurrentState: any = null;
       try {
-        leftCurrentState = this.getCurrentViewStateFromBrowser(
+        leftCurrentState = readerView.getCurrentViewStateFromBrowser(
           state.leftBrowser,
         );
       } catch {
         // Browser may be dead
       }
       try {
-        rightCurrentState = this.getCurrentViewStateFromBrowser(
+        rightCurrentState = readerView.getCurrentViewStateFromBrowser(
           state.rightBrowser,
         );
       } catch {
@@ -2338,13 +2330,15 @@ export class SplitViewFactory {
     }
 
     // 2. Save current reader's viewState (position info)
-    const leftViewState = await this.getViewStateFromReader(currentReader);
+    const leftViewState =
+      await readerView.getViewStateFromReader(currentReader);
 
     // 3. Get right PDF's stored state
-    const rightViewState = await this.getStoredViewState(secondaryPDF);
+    const rightViewState =
+      await attachmentState.getStoredViewState(secondaryPDF);
 
     // 4. Close current reader (but don't close tab)
-    await this.closeReaderWithoutClosingTab(currentReader);
+    await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
     // 5. Replace tab container to remove old event listeners
     // The old ReaderTab added event listeners for tab-bottom-placeholder-resize,
@@ -2442,8 +2436,12 @@ export class SplitViewFactory {
       const height =
         event.detail?.height !== undefined ? event.detail.height : null;
       try {
-        const leftReader = self.getInternalReaderFromBrowser(s.leftBrowser);
-        const rightReader = self.getInternalReaderFromBrowser(s.rightBrowser);
+        const leftReader = readerRuntime.getInternalReaderFromBrowser(
+          s.leftBrowser,
+        );
+        const rightReader = readerRuntime.getInternalReaderFromBrowser(
+          s.rightBrowser,
+        );
         if (leftReader?.setBottomPlaceholderHeight) {
           leftReader.setBottomPlaceholderHeight(height);
         }
@@ -2683,10 +2681,11 @@ export class SplitViewFactory {
     }
 
     // 2. Save current reader's viewState (position info)
-    const leftViewState = await this.getViewStateFromReader(currentReader);
+    const leftViewState =
+      await readerView.getViewStateFromReader(currentReader);
 
     // 3. Close current reader (but don't close tab)
-    await this.closeReaderWithoutClosingTab(currentReader);
+    await readerRuntime.closeReaderWithoutClosingTab(currentReader);
 
     // 4. Replace tab container to remove old event listeners
     const newContainer = container.cloneNode(false) as HTMLElement;
@@ -2780,8 +2779,12 @@ export class SplitViewFactory {
       const height =
         event.detail?.height !== undefined ? event.detail.height : null;
       try {
-        const leftReader = self.getInternalReaderFromBrowser(s.leftBrowser);
-        const rightReader = self.getInternalReaderFromBrowser(s.rightBrowser);
+        const leftReader = readerRuntime.getInternalReaderFromBrowser(
+          s.leftBrowser,
+        );
+        const rightReader = readerRuntime.getInternalReaderFromBrowser(
+          s.rightBrowser,
+        );
         if (leftReader?.setBottomPlaceholderHeight) {
           leftReader.setBottomPlaceholderHeight(height);
         }
@@ -3040,7 +3043,8 @@ export class SplitViewFactory {
     // Set up observers on both readers' internal state
     const setupObserver = (browser: XULBrowserElement, isLeft: boolean) => {
       try {
-        const internalReader = this.getInternalReaderFromBrowser(browser);
+        const internalReader =
+          readerRuntime.getInternalReaderFromBrowser(browser);
         if (!internalReader) return;
 
         // Hook into the reader's annotation selection
@@ -3058,7 +3062,7 @@ export class SplitViewFactory {
               try {
                 const otherBrowser = isLeft ? s.rightBrowser : s.leftBrowser;
                 const otherReader =
-                  self.getInternalReaderFromBrowser(otherBrowser);
+                  readerRuntime.getInternalReaderFromBrowser(otherBrowser);
                 if (otherReader?.setSelectedAnnotationIDs) {
                   // Clone ids array for the other browser's context
                   const clonedIds = cloneForBrowser(
@@ -3121,28 +3125,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Get PDF viewer from internal reader
-   */
-  private static getPdfViewerFromReader(internalReader: any): any {
-    try {
-      const primaryView = internalReader?._primaryView;
-      if (!primaryView) return null;
-
-      const iframe = primaryView._iframe;
-      if (!iframe) return null;
-
-      const iframeWin = iframe.contentWindow;
-      if (!iframeWin) return null;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      return wrappedWin.PDFViewerApplication?.pdfViewer || null;
-    } catch (e) {
-      Zotero.debug(`Split view: getPdfViewerFromReader error: ${e}`);
-      return null;
-    }
-  }
-
-  /**
    * Sync the current side to the target side's position and scale state.
    *
    * The current side is the view where the context menu was triggered.
@@ -3165,7 +3147,8 @@ export class SplitViewFactory {
         targetSide === "left" ? state.leftBrowser : state.rightBrowser;
       const currentBrowser =
         currentSide === "left" ? state.leftBrowser : state.rightBrowser;
-      const currentReader = this.getInternalReaderFromBrowser(currentBrowser);
+      const currentReader =
+        readerRuntime.getInternalReaderFromBrowser(currentBrowser);
       if (!currentReader) {
         Zotero.debug(
           "Split view: syncPositionAndScale - current reader not found",
@@ -3176,8 +3159,8 @@ export class SplitViewFactory {
       const fallbackViewState =
         targetSide === "left" ? state.leftViewState : state.rightViewState;
       const viewState =
-        this.getImmediateViewStateFromBrowser(sourceBrowser) ||
-        this.getCurrentViewStateFromBrowser(sourceBrowser) ||
+        readerView.getImmediateViewStateFromBrowser(sourceBrowser) ||
+        readerView.getCurrentViewStateFromBrowser(sourceBrowser) ||
         (fallbackViewState
           ? JSON.parse(JSON.stringify(fallbackViewState))
           : null);
@@ -3186,7 +3169,7 @@ export class SplitViewFactory {
         return;
       }
 
-      const applyResult = await this.applyViewStateToReader(
+      const applyResult = await readerView.applyViewStateToReader(
         currentReader,
         viewState,
       );
@@ -3467,42 +3450,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Wait for browser to load reader.html
-   */
-  private static waitForBrowserLoad(browser: XULBrowserElement): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let attempts = 0;
-      const maxAttempts = 200; // 20 seconds max
-
-      const check = () => {
-        attempts++;
-        try {
-          const win = browser.contentWindow;
-          if (win && win.document && win.document.readyState === "complete") {
-            // Check if createReader function exists
-            const wrappedWin = (win as any).wrappedJSObject || win;
-            if (typeof wrappedWin.createReader === "function") {
-              resolve();
-              return;
-            }
-          }
-        } catch {
-          // Ignore errors during check
-        }
-
-        if (attempts >= maxAttempts) {
-          reject(new Error("Timeout waiting for browser to load"));
-          return;
-        }
-
-        setTimeout(check, 100);
-      };
-
-      check();
-    });
-  }
-
-  /**
    * Initialize a reader in a browser element
    * @param viewState - Optional view state to restore position
    * @param isRight - Whether this is the right browser (shows context pane toggle)
@@ -3515,7 +3462,7 @@ export class SplitViewFactory {
     viewState?: any,
     isRight: boolean = false,
   ): Promise<void> {
-    await this.waitForBrowserLoad(browser);
+    await readerRuntime.waitForBrowserLoad(browser);
 
     const win = browser.contentWindow;
     if (!win) throw new Error("Browser contentWindow not available");
@@ -3671,7 +3618,7 @@ export class SplitViewFactory {
               viewState,
             )
           ) {
-            self.syncLastReadAloudPositionToItem(itemRef, viewState);
+            attachmentState.syncLastReadAloudPositionToItem(itemRef, viewState);
           }
         }
         // Sync zoom when scale changes (toolbar zoom in/out)
@@ -3738,7 +3685,7 @@ export class SplitViewFactory {
     );
 
     // Wait for internal reader to be ready
-    await this.waitForInternalReader(browser);
+    await readerRuntime.waitForInternalReader(browser);
 
     this.installToolbarCloseButton(tabID, browser, isRight ? "right" : "left");
 
@@ -3765,7 +3712,8 @@ export class SplitViewFactory {
     side: "left" | "right",
   ) {
     const state = this.stateMap.get(tabID);
-    if (!state || state.isCleaningUp || !this.isBrowserAlive(browser)) return;
+    if (!state || state.isCleaningUp || !readerRuntime.isBrowserAlive(browser))
+      return;
 
     try {
       state.toolbarCloseObservers = state.toolbarCloseObservers.filter(
@@ -3892,7 +3840,8 @@ export class SplitViewFactory {
       });
 
       // Check the internal reader object for sidenav
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (internalReader) {
         // Try to hide sidenav via the reader API if available
         if (internalReader._sidenav) {
@@ -3914,227 +3863,6 @@ export class SplitViewFactory {
     }
   }
 
-  /**
-   * Wait for internal reader to initialize
-   * This includes waiting for the PDF viewer iframe to fully load
-   */
-  private static async waitForInternalReader(
-    browser: XULBrowserElement,
-  ): Promise<void> {
-    const maxAttempts = 100;
-    let attempts = 0;
-
-    // First, wait for _primaryView to exist
-    while (attempts < maxAttempts) {
-      attempts++;
-      try {
-        const internalReader = this.getInternalReaderFromBrowser(browser);
-        if (internalReader && internalReader._primaryView) {
-          // Found _primaryView, now wait for it to fully initialize
-          // This ensures the PDF.js viewer iframe is loaded and pdfjsLib is available
-          if (internalReader._primaryView.initializedPromise) {
-            try {
-              await internalReader._primaryView.initializedPromise;
-            } catch (e) {
-              Zotero.debug(
-                `Split view: primaryView initialization failed: ${e}`,
-              );
-              // Continue anyway, the view might still be usable
-            }
-          }
-          return;
-        }
-      } catch {
-        // Ignore errors during check
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    throw new Error("Timeout waiting for internal reader");
-  }
-
-  /**
-   * Get internal reader object from browser
-   */
-  private static getInternalReaderFromBrowser(browser: XULBrowserElement): any {
-    if (!this.isBrowserAlive(browser)) return null;
-    try {
-      const win = browser.contentWindow;
-      if (!win) return null;
-      const wrappedWin = (win as any).wrappedJSObject || win;
-      return wrappedWin._reader || null;
-    } catch (e) {
-      Zotero.debug(`Split view: getInternalReaderFromBrowser error: ${e}`);
-      return null;
-    }
-  }
-
-  /**
-   * Check if a browser element is still alive and usable
-   */
-  private static isBrowserAlive(browser: XULBrowserElement): boolean {
-    try {
-      // Try to access a property - this will throw if the object is dead
-      const _test = browser.contentWindow;
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Unload a browser by setting its src to about:blank
-   * This prevents dead object errors from callbacks
-   */
-  private static unloadBrowser(browser: XULBrowserElement): void {
-    try {
-      if (this.isBrowserAlive(browser)) {
-        browser.setAttribute("src", "about:blank");
-      }
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  /**
-   * Close a Zotero reader without closing its tab
-   * Cleans up the reader (flushes state to disk, unregisters listeners)
-   * and removes it from Zotero.Reader._readers array
-   */
-  private static async closeReaderWithoutClosingTab(
-    reader: any,
-  ): Promise<void> {
-    try {
-      const win = reader._window;
-
-      // 1. Remove window-level event listeners FIRST
-      if (win) {
-        try {
-          if (reader._handleLoad) {
-            win.removeEventListener("DOMContentLoaded", reader._handleLoad);
-          }
-          if (reader._handlePointerDown) {
-            win.removeEventListener("pointerdown", reader._handlePointerDown);
-          }
-          if (reader._handlePointerUp) {
-            win.removeEventListener("pointerup", reader._handlePointerUp);
-          }
-        } catch (e) {
-          Zotero.debug(
-            `Split view: closeReader - removeEventListener failed: ${e}`,
-          );
-        }
-      }
-
-      // 2. Call uninit() to flush state to disk and clean up observers
-      if (typeof reader.uninit === "function") {
-        try {
-          reader.uninit();
-        } catch (e) {
-          Zotero.debug(`Split view: closeReader - uninit failed: ${e}`);
-        }
-      }
-
-      // 3. Now unload the reader's iframe
-      if (reader._iframe) {
-        this.unloadBrowser(reader._iframe);
-        // Wait a bit for pending callbacks to complete
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-
-      // 4. Clear internal references AFTER uninit and unload
-      try {
-        reader._internalReader = null;
-        reader._iframeWindow = null;
-      } catch (e) {
-        Zotero.debug(`Split view: closeReader - clear refs failed: ${e}`);
-      }
-
-      // 5. Remove from Zotero.Reader._readers array
-      const readers = (Zotero.Reader as any)._readers;
-      const index = readers.indexOf(reader);
-      if (index !== -1) {
-        readers.splice(index, 1);
-      }
-    } catch (e) {
-      Zotero.debug(`Split view: closeReaderWithoutClosingTab failed: ${e}`);
-    }
-  }
-
-  /**
-   * Get view state from a reader (real-time position info)
-   */
-  private static async getViewStateFromReader(reader: any): Promise<any> {
-    try {
-      // Prefer using _getState() method (syncs to disk)
-      if (typeof reader._getState === "function") {
-        return await reader._getState();
-      }
-      // Fallback: get from internal reader
-      const internalReader = reader._internalReader;
-      if (internalReader?._state?.primaryViewState) {
-        return internalReader._state.primaryViewState;
-      }
-    } catch {
-      // Ignore errors
-    }
-    return null;
-  }
-
-  /**
-   * Get stored view state from disk for an attachment item
-   */
-  private static async getStoredViewState(item: Zotero.Item): Promise<any> {
-    let state: any = null;
-    try {
-      const dir = Zotero.Attachments.getStorageDirectory(item);
-      const stateFile = PathUtils.join(dir.path, ".zotero-reader-state");
-      if (await IOUtils.exists(stateFile)) {
-        state = await IOUtils.readJSON(stateFile);
-      }
-    } catch {
-      // Ignore errors
-    }
-
-    const lastReadAloudPosition = this.getAttachmentLastReadAloudPosition(item);
-    if (state) {
-      state.lastReadAloudPosition = lastReadAloudPosition;
-    } else if (lastReadAloudPosition !== null) {
-      state = { lastReadAloudPosition };
-    }
-    return state;
-  }
-
-  /**
-   * Save view state to disk for an attachment item
-   * Mirrors Zotero's ReaderInstance._setState behavior
-   */
-  private static getAttachmentLastReadAloudPosition(item: Zotero.Item): any {
-    try {
-      return (item as any).getAttachmentLastReadAloudPosition?.() ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private static syncLastReadAloudPositionToItem(
-    item: Zotero.Item,
-    viewState: any,
-  ): void {
-    if (!viewState || !("lastReadAloudPosition" in viewState)) return;
-
-    try {
-      const newPosition = viewState.lastReadAloudPosition ?? null;
-      const currentPosition = this.getAttachmentLastReadAloudPosition(item);
-      if (JSON.stringify(newPosition) !== JSON.stringify(currentPosition)) {
-        (item as any).setAttachmentLastReadAloudPosition?.(newPosition);
-      }
-    } catch (e) {
-      Zotero.debug(`Split view: Failed to save Read Aloud position: ${e}`);
-    }
-  }
-
   private static shouldSyncLastReadAloudPositionFromBrowser(
     state: SplitTabState,
     browser: XULBrowserElement,
@@ -4147,103 +3875,6 @@ export class SplitViewFactory {
 
     const status = state.readAloudStatuses[side];
     return state.readAloudSide === side && !!status?.active && !status.paused;
-  }
-
-  private static async saveViewStateToDisk(
-    itemID: number,
-    viewState: any,
-  ): Promise<void> {
-    if (!viewState) return;
-    try {
-      const item = Zotero.Items.get(itemID);
-      if (!item) return;
-
-      // Update last page index (like Zotero does)
-      if (viewState.pageIndex !== undefined) {
-        item.setAttachmentLastPageIndex(viewState.pageIndex);
-      }
-
-      const dir = Zotero.Attachments.getStorageDirectory(item);
-      if (!dir.exists()) {
-        await Zotero.Attachments.createDirectoryForItem(item);
-      }
-      const stateFile = PathUtils.join(dir.path, ".zotero-reader-state");
-
-      Zotero.debug("Split view: Writing reader state to " + stateFile);
-      await IOUtils.writeJSON(stateFile, viewState);
-    } catch (e) {
-      Zotero.debug("Split view: Failed to save view state: " + e);
-    }
-  }
-
-  /**
-   * Get the immediate visible view state from a browser.
-   *
-   * Unlike the debounced reader state, this reads directly from PDF.js so a
-   * context-menu sync uses the state the user is currently looking at.
-   */
-  private static getImmediateViewStateFromBrowser(
-    browser: XULBrowserElement,
-  ): any {
-    try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
-      return this.getImmediateViewStateFromReader(internalReader);
-    } catch {
-      // Ignore errors and let callers fall back to cached state
-    }
-    return null;
-  }
-
-  private static getImmediateViewStateFromReader(reader: any): any {
-    try {
-      const internalReader = reader?._internalReader || reader;
-      const primaryView = internalReader?._primaryView;
-      const iframeWindow = primaryView?._iframeWindow;
-      const pdfViewer = iframeWindow?.PDFViewerApplication?.pdfViewer;
-      if (!pdfViewer) return null;
-
-      const location = pdfViewer._location;
-      if (!location) return null;
-
-      const viewState: Record<string, any> = {
-        pageIndex: Math.max(0, (location.pageNumber || 1) - 1),
-        scale:
-          location.scale !== undefined
-            ? location.scale
-            : pdfViewer.currentScaleValue,
-        scrollMode: pdfViewer.scrollMode,
-        spreadMode: pdfViewer.spreadMode,
-      };
-      if (location.top !== undefined) {
-        viewState.top = location.top;
-      }
-      if (location.left !== undefined) {
-        viewState.left = location.left;
-      }
-      return viewState;
-    } catch {
-      // Ignore errors and let callers fall back to cached state
-    }
-    return null;
-  }
-
-  /**
-   * Get current view state from internal reader in browser
-   */
-  private static getCurrentViewStateFromBrowser(
-    browser: XULBrowserElement,
-  ): any {
-    try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
-      if (internalReader?._state?.primaryViewState) {
-        return JSON.parse(
-          JSON.stringify(internalReader._state.primaryViewState),
-        );
-      }
-    } catch {
-      // Ignore errors
-    }
-    return null;
   }
 
   /**
@@ -4295,7 +3926,7 @@ export class SplitViewFactory {
       reader = Zotero.Reader.getByTabID(tabID);
     }
     if (!reader) return null;
-    await this.waitForReaderReady(reader, maxWaitMs);
+    await readerRuntime.waitForReaderReady(reader, maxWaitMs);
     return reader;
   }
 
@@ -4335,100 +3966,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Apply a captured primary view state to a standard reader tab.
-   */
-  private static async applyViewStateToReader(
-    reader: any,
-    viewState: any,
-  ): Promise<{
-    pageIndexClamped: boolean;
-    requestedPageIndex: number;
-    appliedPageIndex: number;
-  } | null> {
-    if (!reader || !viewState) return null;
-
-    try {
-      const internalReader = reader._internalReader || reader;
-      const targetPrimaryView = internalReader?._primaryView;
-      if (!targetPrimaryView?._setState) return null;
-
-      const pdfViewer = this.getPdfViewerFromReader(internalReader);
-      const statsPagesCount =
-        internalReader?._state?.primaryViewStats?.pagesCount;
-      const requestedPageIndex = Math.max(0, viewState.pageIndex ?? 0);
-      let pageIndex = requestedPageIndex;
-      let pageIndexClamped = false;
-
-      const pagesCount = pdfViewer?.pagesCount ?? statsPagesCount;
-      if (Number.isInteger(pagesCount) && pagesCount > 0) {
-        const maxPageIndex = pagesCount - 1;
-        if (pageIndex > maxPageIndex) {
-          pageIndex = maxPageIndex;
-          pageIndexClamped = true;
-        }
-      }
-
-      const stateToApply: Record<string, any> = {
-        pageIndex,
-        scale: viewState.scale,
-      };
-      if (!pageIndexClamped && viewState.top !== undefined) {
-        stateToApply.top = viewState.top;
-      }
-      if (!pageIndexClamped && viewState.left !== undefined) {
-        stateToApply.left = viewState.left;
-      }
-      if (Number.isInteger(viewState.scrollMode)) {
-        stateToApply.scrollMode = viewState.scrollMode;
-      }
-      if (Number.isInteger(viewState.spreadMode)) {
-        stateToApply.spreadMode = viewState.spreadMode;
-      }
-
-      let clonedState = stateToApply;
-      try {
-        const targetWin =
-          targetPrimaryView._iframeWindow ||
-          internalReader?._iframeWindow ||
-          reader._iframeWindow ||
-          null;
-        if (targetWin) {
-          clonedState = Components.utils.cloneInto(stateToApply, targetWin, {
-            wrapReflectors: true,
-          });
-        }
-      } catch (e) {
-        Zotero.debug(
-          `Split view: applyViewStateToReader cloneInto failed: ${e}`,
-        );
-      }
-
-      if (pageIndexClamped) {
-        Zotero.debug(
-          `Split view: clamped pageIndex ${requestedPageIndex} to ${pageIndex}`,
-        );
-      }
-
-      await targetPrimaryView._setState(clonedState);
-      const appliedViewState =
-        this.getImmediateViewStateFromReader(internalReader);
-      const appliedPageIndex = Math.max(
-        0,
-        appliedViewState?.pageIndex ?? pageIndex,
-      );
-      return {
-        pageIndexClamped:
-          pageIndexClamped || appliedPageIndex !== requestedPageIndex,
-        requestedPageIndex,
-        appliedPageIndex,
-      };
-    } catch (e) {
-      Zotero.debug(`Split view: applyViewStateToReader failed: ${e}`);
-    }
-    return null;
-  }
-
-  /**
    * Wait for a standard reader tab to finish background loading and apply the
    * desired view state without selecting it.
    */
@@ -4439,7 +3976,7 @@ export class SplitViewFactory {
     try {
       const reader = await this.waitForReaderByTabID(tabID);
       if (!reader) return;
-      await this.applyViewStateToReader(reader, viewState);
+      await readerView.applyViewStateToReader(reader, viewState);
     } catch (e) {
       Zotero.debug(`Split view: restoreSeparateViewTarget failed: ${e}`);
     }
@@ -4516,8 +4053,8 @@ export class SplitViewFactory {
       target.tabID = existingTabID;
       selectTargetIfNeeded();
       if (deferRestore) return;
-      await this.waitForReaderReady(liveReader);
-      await this.applyViewStateToReader(liveReader, target.viewState);
+      await readerRuntime.waitForReaderReady(liveReader);
+      await readerView.applyViewStateToReader(liveReader, target.viewState);
       return;
     }
 
@@ -4550,7 +4087,7 @@ export class SplitViewFactory {
       if (deferRestore) return;
       const loadingReader = await this.waitForReaderByTabID(existingTabID);
       if (!loadingReader) return;
-      await this.applyViewStateToReader(loadingReader, target.viewState);
+      await readerView.applyViewStateToReader(loadingReader, target.viewState);
       return;
     }
 
@@ -4567,7 +4104,7 @@ export class SplitViewFactory {
     params: { x: number; y: number; itemGroups: any[][] },
   ) {
     // Check if browser is still alive
-    if (!this.isBrowserAlive(browser)) return;
+    if (!readerRuntime.isBrowserAlive(browser)) return;
 
     const mainWindow = Zotero.getMainWindow();
     const { x, y, itemGroups } = params;
@@ -4776,8 +4313,12 @@ export class SplitViewFactory {
     const state = this.stateMap.get(tabID);
     if (!state || !state.isSamePDF) return;
 
-    const leftReader = this.getInternalReaderFromBrowser(state.leftBrowser);
-    const rightReader = this.getInternalReaderFromBrowser(state.rightBrowser);
+    const leftReader = readerRuntime.getInternalReaderFromBrowser(
+      state.leftBrowser,
+    );
+    const rightReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
     if (!leftReader || !rightReader) return;
 
     const leftAM = leftReader._annotationManager;
@@ -4932,7 +4473,7 @@ export class SplitViewFactory {
     // Toggle sidebar on secondary reader
     try {
       const internalReader =
-        this.getInternalReaderFromBrowser(secondaryBrowser);
+        readerRuntime.getInternalReaderFromBrowser(secondaryBrowser);
       if (
         internalReader &&
         typeof internalReader.toggleSidebar === "function"
@@ -4983,21 +4524,27 @@ export class SplitViewFactory {
     const { tabIndex } = Zotero_Tabs._getTab(tabID);
 
     const leftCurrentState =
-      this.getCurrentViewStateFromBrowser(state.leftBrowser) ||
+      readerView.getCurrentViewStateFromBrowser(state.leftBrowser) ||
       state.leftViewState;
     const rightCurrentState =
-      this.getCurrentViewStateFromBrowser(state.rightBrowser) ||
+      readerView.getCurrentViewStateFromBrowser(state.rightBrowser) ||
       state.rightViewState;
 
     try {
       if (state.isSamePDF) {
         const keepState =
           clickedSide === "left" ? leftCurrentState : rightCurrentState;
-        await this.saveViewStateToDisk(state.leftItemID, keepState);
+        await attachmentState.saveViewStateToDisk(state.leftItemID, keepState);
       } else {
         await Promise.all([
-          this.saveViewStateToDisk(state.leftItemID, leftCurrentState),
-          this.saveViewStateToDisk(state.rightItemID, rightCurrentState),
+          attachmentState.saveViewStateToDisk(
+            state.leftItemID,
+            leftCurrentState,
+          ),
+          attachmentState.saveViewStateToDisk(
+            state.rightItemID,
+            rightCurrentState,
+          ),
         ]);
       }
     } catch (e) {
@@ -5150,18 +4697,20 @@ export class SplitViewFactory {
     let rightCurrentState: any = null;
     try {
       // Get the most current state from browsers
-      leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
-      rightCurrentState = this.getCurrentViewStateFromBrowser(
+      leftCurrentState = readerView.getCurrentViewStateFromBrowser(
+        state.leftBrowser,
+      );
+      rightCurrentState = readerView.getCurrentViewStateFromBrowser(
         state.rightBrowser,
       );
 
       // Save both states
       await Promise.all([
-        this.saveViewStateToDisk(
+        attachmentState.saveViewStateToDisk(
           state.leftItemID,
           leftCurrentState || state.leftViewState,
         ),
-        this.saveViewStateToDisk(
+        attachmentState.saveViewStateToDisk(
           state.rightItemID,
           rightCurrentState || state.rightViewState,
         ),
@@ -5242,8 +4791,8 @@ export class SplitViewFactory {
 
     // Unload browsers FIRST to prevent dead object errors from callbacks
     // This stops the internal readers from firing more callbacks
-    this.unloadBrowser(leftBrowser);
-    this.unloadBrowser(rightBrowser);
+    readerRuntime.unloadBrowser(leftBrowser);
+    readerRuntime.unloadBrowser(rightBrowser);
 
     // Store references before removing from map
     const eventListeners = [...state.eventListeners];
@@ -5419,12 +4968,14 @@ export class SplitViewFactory {
     let leftCurrentState: any = null;
     let rightCurrentState: any = null;
     try {
-      leftCurrentState = this.getCurrentViewStateFromBrowser(state.leftBrowser);
+      leftCurrentState = readerView.getCurrentViewStateFromBrowser(
+        state.leftBrowser,
+      );
     } catch {
       // Browser may be dead
     }
     try {
-      rightCurrentState = this.getCurrentViewStateFromBrowser(
+      rightCurrentState = readerView.getCurrentViewStateFromBrowser(
         state.rightBrowser,
       );
     } catch {
@@ -5433,8 +4984,11 @@ export class SplitViewFactory {
 
     // Save states asynchronously (don't await)
     Promise.all([
-      this.saveViewStateToDisk(leftItemID, leftCurrentState || leftViewState),
-      this.saveViewStateToDisk(
+      attachmentState.saveViewStateToDisk(
+        leftItemID,
+        leftCurrentState || leftViewState,
+      ),
+      attachmentState.saveViewStateToDisk(
         rightItemID,
         rightCurrentState || rightViewState,
       ),
@@ -5496,7 +5050,7 @@ export class SplitViewFactory {
         primarySide === "left" ? state.leftBrowser : state.rightBrowser;
 
       const primaryContainer =
-        this.getViewerContainerFromBrowser(primaryBrowser);
+        readerView.getViewerContainerFromBrowser(primaryBrowser);
       if (!primaryContainer) return;
 
       // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -5544,7 +5098,7 @@ export class SplitViewFactory {
     if (state.scrollHandler) {
       try {
         const primaryContainer = state.scrollHandlerBrowser
-          ? this.getViewerContainerFromBrowser(state.scrollHandlerBrowser)
+          ? readerView.getViewerContainerFromBrowser(state.scrollHandlerBrowser)
           : null;
         if (primaryContainer) {
           primaryContainer.removeEventListener("scroll", state.scrollHandler);
@@ -5618,9 +5172,10 @@ export class SplitViewFactory {
    * Call zoomIn on a browser's internal reader
    */
   private static zoomInForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
+    if (!readerRuntime.isBrowserAlive(browser)) return;
     try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomIn === "function") {
         internalReader.zoomIn();
       }
@@ -5633,9 +5188,10 @@ export class SplitViewFactory {
    * Call zoomOut on a browser's internal reader
    */
   private static zoomOutForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
+    if (!readerRuntime.isBrowserAlive(browser)) return;
     try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomOut === "function") {
         internalReader.zoomOut();
       }
@@ -5648,9 +5204,10 @@ export class SplitViewFactory {
    * Call zoomReset on a browser's internal reader
    */
   private static zoomResetForBrowser(browser: XULBrowserElement) {
-    if (!this.isBrowserAlive(browser)) return;
+    if (!readerRuntime.isBrowserAlive(browser)) return;
     try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (internalReader && typeof internalReader.zoomReset === "function") {
         internalReader.zoomReset();
       }
@@ -5706,7 +5263,8 @@ export class SplitViewFactory {
         return;
       }
 
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (!internalReader) return;
 
       const primaryView = internalReader._primaryView;
@@ -5806,7 +5364,7 @@ export class SplitViewFactory {
     browser: XULBrowserElement,
     open: boolean,
   ) {
-    if (!this.isBrowserAlive(browser)) return;
+    if (!readerRuntime.isBrowserAlive(browser)) return;
     try {
       const win = browser.contentWindow;
       if (!win) return;
@@ -5826,7 +5384,8 @@ export class SplitViewFactory {
       Zotero.debug(`Split view: setContextPaneOpenForBrowser error: ${e}`);
       // Fallback: direct _updateState (async, may cause brief flicker)
       try {
-        const internalReader = this.getInternalReaderFromBrowser(browser);
+        const internalReader =
+          readerRuntime.getInternalReaderFromBrowser(browser);
         const fallbackWin = browser.contentWindow;
         if (internalReader?._updateState && fallbackWin) {
           const stateUpdate = Components.utils.cloneInto(
@@ -5896,7 +5455,8 @@ export class SplitViewFactory {
     if (!state) return;
 
     try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
+      const internalReader =
+        readerRuntime.getInternalReaderFromBrowser(browser);
       if (!internalReader) return;
 
       const primaryView = internalReader._primaryView;
@@ -6154,33 +5714,6 @@ export class SplitViewFactory {
   }
 
   /**
-   * Get viewer container from browser
-   */
-  private static getViewerContainerFromBrowser(
-    browser: XULBrowserElement,
-  ): Element | null {
-    try {
-      const internalReader = this.getInternalReaderFromBrowser(browser);
-      if (!internalReader) return null;
-
-      const primaryView = internalReader._primaryView;
-      if (!primaryView) return null;
-
-      const iframe = primaryView._iframe;
-      if (!iframe) return null;
-
-      const iframeWin = iframe.contentWindow;
-      if (!iframeWin) return null;
-
-      const wrappedWin = (iframeWin as any).wrappedJSObject || iframeWin;
-      return wrappedWin.document?.getElementById("viewerContainer") || null;
-    } catch (e) {
-      Zotero.debug(`Split view: getViewerContainerFromBrowser error: ${e}`);
-      return null;
-    }
-  }
-
-  /**
    * Activate one side of the split view and run all related side effects.
    *
    * "Activation" is intentionally shared by click and focus interactions.
@@ -6392,14 +5925,14 @@ export class SplitViewFactory {
             let leftCurrentState: any = null;
             let rightCurrentState: any = null;
             try {
-              leftCurrentState = self.getCurrentViewStateFromBrowser(
+              leftCurrentState = readerView.getCurrentViewStateFromBrowser(
                 closedState.leftBrowser,
               );
             } catch {
               /* Browser may be dead */
             }
             try {
-              rightCurrentState = self.getCurrentViewStateFromBrowser(
+              rightCurrentState = readerView.getCurrentViewStateFromBrowser(
                 closedState.rightBrowser,
               );
             } catch {
@@ -6408,11 +5941,11 @@ export class SplitViewFactory {
 
             // Save states asynchronously
             Promise.all([
-              self.saveViewStateToDisk(
+              attachmentState.saveViewStateToDisk(
                 leftItemID,
                 leftCurrentState || leftViewState,
               ),
-              self.saveViewStateToDisk(
+              attachmentState.saveViewStateToDisk(
                 rightItemID,
                 rightCurrentState || rightViewState,
               ),
@@ -6643,7 +6176,7 @@ export class SplitViewFactory {
 
     // Wait for the reader to fully initialise
     // For unloaded tabs, we need to wait longer and ensure the reader is ready
-    await this.waitForReaderReady(reader);
+    await readerRuntime.waitForReaderReady(reader);
 
     // Step 2: select the second PDF (right side)
     const secondPDF = await this.pdfSelector.select(
@@ -6659,50 +6192,6 @@ export class SplitViewFactory {
       await this.convertToSamePDFSplitView(reader);
     } else {
       await this.convertToSplitView(reader, secondPDF);
-    }
-  }
-
-  /**
-   * Wait for a reader to be fully initialized and ready
-   * Uses Zotero's native Promise mechanisms instead of arbitrary delays
-   */
-  private static async waitForReaderReady(
-    reader: any,
-    maxWaitMs = 10000,
-  ): Promise<void> {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("timeout")), maxWaitMs),
-    );
-
-    try {
-      // Method 1: Use _initPromise if available (most reliable for basic init)
-      if (reader._initPromise) {
-        await Promise.race([reader._initPromise, timeoutPromise]);
-      }
-
-      // Method 2: Wait for _internalReader._primaryView.initializedPromise
-      // This is the pattern Zotero uses internally (see reader.js line 2039-2053)
-      const pollInterval = 10;
-      let attempts = 0;
-      const maxAttempts = maxWaitMs / pollInterval;
-
-      while (!reader._internalReader?._primaryView?._iframeWindow) {
-        if (attempts >= maxAttempts) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        attempts++;
-      }
-
-      // Wait for the primary view's initialized promise if available
-      if (reader._internalReader?._primaryView?.initializedPromise) {
-        await Promise.race([
-          reader._internalReader._primaryView.initializedPromise,
-          timeoutPromise,
-        ]);
-      }
-    } catch {
-      // Timeout or error - reader may still be usable
     }
   }
 }
