@@ -36,6 +36,7 @@ import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { SplitTabCleanup } from "./splitView/tabCleanup";
 import { SplitSessionRestore } from "./splitView/sessionRestore";
+import { SplitReaderInitialization } from "./splitView/readerInitialization";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -218,6 +219,51 @@ export class SplitViewFactory {
     updateSession: (tabID) => this.updateTabDataForSession(tabID),
   });
   private static readerHost = new SplitReaderHost();
+  private static readerInitialization = new SplitReaderInitialization(
+    this.readerHost,
+    {
+      getState: (tabID) => this.stateMap.get(tabID) || null,
+      getReadAloudConfig: (browser, ftl, onStatus) =>
+        this.readAloud.getReaderConfig(browser, ftl, onStatus),
+      handleReadAloudStatus: (tabID, browser, status) =>
+        this.readAloudCoordinator.handleStatus(tabID, browser, status),
+      openContextMenu: (browser, popupset, params) =>
+        this.openContextMenu(browser, popupset, params),
+      toggleSidebar: (tabID, browser, open) =>
+        this.sync.handleSidebarToggle(tabID, browser, open),
+      shouldSyncLastReadAloudPosition: (state, browser, viewState) =>
+        this.readAloudCoordinator.shouldSyncLastPosition(
+          state,
+          browser,
+          viewState,
+        ),
+      syncLastReadAloudPosition: (item, viewState) =>
+        attachmentState.syncLastReadAloudPositionToItem(item, viewState),
+      writeSession: (state) => this.session.write(state),
+      saveAnnotations: (item, _browser, annotations, readerWindow) =>
+        annotationStore.save(item.id, annotations, readerWindow),
+      deleteAnnotations: (itemID, ids) => annotationStore.remove(itemID, ids),
+      reportAnnotationFailure: (browser, error) =>
+        reportAnnotationFailure(browser, error),
+      toggleContextPane: (tabID) => {
+        const win = Zotero.getMainWindow();
+        const contextPane = (win as any).ZoteroContextPane;
+        if (!contextPane) return;
+        contextPane.togglePane();
+        setTimeout(() => {
+          const state = this.stateMap.get(tabID);
+          if (!state?.rightBrowser) return;
+          const isOpen = !((win as any).ZoteroContextPane?.collapsed ?? true);
+          splitContextPane.setReaderOpen(state.rightBrowser, isOpen);
+        }, 50);
+      },
+      afterReady: (tabID, browser, side) => {
+        this.installToolbarCloseButton(tabID, browser, side);
+        if (side === "left") splitContextPane.hideReaderSidenav(browser);
+        else splitContextPane.injectReaderHandler(browser);
+      },
+    },
+  );
   private static creation = new SplitViewCreationService({
     getDefaultPrimarySide: () => this.primaryView.getDefaultSide(),
     getOriginalTitle: (tabID) => {
@@ -907,81 +953,14 @@ export class SplitViewFactory {
     viewState?: any,
     isRight: boolean = false,
   ): Promise<void> {
-    await this.readerHost.initialize({
+    await this.readerInitialization.initialize(
+      tabID,
       browser,
       item,
+      popupset,
       viewState,
       isRight,
-      getReadAloudConfig: (ftl, onStatus) =>
-        this.readAloud.getReaderConfig(browser, ftl, onStatus),
-      callbacks: {
-        onReadAloudStatus: (status) =>
-          this.readAloudCoordinator.handleStatus(tabID, browser, status),
-        openContextMenu: (params) =>
-          this.openContextMenu(browser, popupset, params),
-        toggleSidebar: (open) =>
-          this.sync.handleSidebarToggle(tabID, browser, open),
-        onViewStateChange: (viewState) => {
-          const state = this.stateMap.get(tabID);
-          if (
-            !state ||
-            state.isCleaningUp ||
-            (browser !== state.leftBrowser && browser !== state.rightBrowser)
-          )
-            return;
-          const isLeft = browser === state.leftBrowser;
-          const stateCopy = JSON.parse(JSON.stringify(viewState));
-          if (isLeft) state.leftViewState = stateCopy;
-          else state.rightViewState = stateCopy;
-          this.session.write(state);
-          if (
-            this.readAloudCoordinator.shouldSyncLastPosition(
-              state,
-              browser,
-              viewState,
-            )
-          )
-            attachmentState.syncLastReadAloudPositionToItem(item, viewState);
-        },
-        saveAnnotations: async (annotations, callback, readerWindow) => {
-          try {
-            await annotationStore.save(item.id, annotations, readerWindow);
-          } catch (error) {
-            reportAnnotationFailure(browser, error);
-          } finally {
-            callback?.();
-          }
-        },
-        deleteAnnotations: (ids) => {
-          void annotationStore
-            .remove(item.id, ids)
-            .catch((error) => reportAnnotationFailure(browser, error));
-        },
-        toggleContextPane: () => {
-          const mainWindow = Zotero.getMainWindow();
-          const contextPane = (mainWindow as any).ZoteroContextPane;
-          if (!contextPane) return;
-          contextPane.togglePane();
-          setTimeout(() => {
-            const state = this.stateMap.get(tabID);
-            if (!state?.rightBrowser) return;
-            const isOpen = !(
-              (mainWindow as any).ZoteroContextPane?.collapsed ?? true
-            );
-            splitContextPane.setReaderOpen(state.rightBrowser, isOpen);
-          }, 50);
-        },
-        afterReady: () => {
-          this.installToolbarCloseButton(
-            tabID,
-            browser,
-            isRight ? "right" : "left",
-          );
-          if (!isRight) splitContextPane.hideReaderSidenav(browser);
-          else splitContextPane.injectReaderHandler(browser);
-        },
-      },
-    });
+    );
   }
 
   /**
