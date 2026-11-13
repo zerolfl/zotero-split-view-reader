@@ -20,6 +20,7 @@ import { SplitTabTitleService } from "./splitView/tabTitles";
 import { SplitTabContextMenu } from "../platform/tabContextMenu";
 import { installCloseButton } from "../platform/readerToolbar";
 import { readerScrollbar } from "../platform/readerScrollbar";
+import { SplitReaderContextMenu } from "./splitView/readerContextMenu";
 import { pauseNativeReaders } from "../platform/readAloud";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -52,6 +53,32 @@ export class SplitViewFactory {
   private static tabContextMenu = new SplitTabContextMenu({
     isActiveSplitView: (id) => this.hasActiveSplitState(id),
     showInLibrary: (id, win) => this.showInLibraryForActiveSide(id, win),
+  });
+  private static readerContextMenu = new SplitReaderContextMenu({
+    isAlive: () => !!addon.data.alive,
+    getState: (id) => this.stateMap.get(id) ?? null,
+    getReaderSide: (id, reader) =>
+      this.readAloudCoordinator.getReaderSide(id, reader as any),
+    getPrimaryMenuConfig: (state, side) =>
+      this.getPrimaryMenuConfig(state, side),
+    getString: (key) => getString(key as Parameters<typeof getString>[0]),
+    getCloseMenuLabel: () => this.getCloseViewMenuLabel(),
+    getSetPrimaryMenuLabel: (menuState) =>
+      this.getSetPrimaryMenuLabel(menuState),
+    getIconURI: (name) => this.getIconURI(name),
+    setMenuItemIcon: (item, uri) => this.setMenuItemIcon(item, uri),
+    swapPDFs: (id) => this.swapPDFs(id),
+    separateViews: (id, side) => void this.separateViews(id, side),
+    handleSplitView: (reader) => void this.handleSplitView(reader),
+    revertToSingleReader: (id, side) =>
+      void this.revertToSingleReader(id, side),
+    setPrimarySide: (id, side) => this.setPrimarySide(id, side),
+    selectAndLoadPDF: (id, side) => this.selectAndLoadPDF(id, side),
+    syncPositionAndScale: (id, side) =>
+      this.sync.syncPositionAndScale(id, side),
+    activateSide: (id, side, win) => this.activateSide(id, side, win),
+    refreshPrimaryMenuItem: (item, id, side) =>
+      this.refreshPrimaryMenuItemElement(item, id, side),
   });
   private static session = new SplitSession(
     (id, data) => this.restoreSplitViewFromSession(id, data),
@@ -311,241 +338,7 @@ export class SplitViewFactory {
   }
 
   static registerContextMenu() {
-    Zotero.Reader.registerEventListener(
-      "createViewContextMenu",
-      (event) => {
-        // Guard: skip if plugin has been unloaded
-        if (!addon.data.alive) return;
-
-        const { reader, append } = event;
-        const mainWindow = Zotero.getMainWindow();
-        const readerTabID = reader.tabID;
-
-        // Check if THIS tab has an active split view (not cleaning up)
-        const tabState = this.stateMap.get(readerTabID);
-        const isInSplitView = !!tabState && !tabState.isCleaningUp;
-        const getContextMenuSide = () => {
-          const s = this.stateMap.get(readerTabID);
-          if (!s || s.isCleaningUp) return null;
-          const readerSide = this.readAloudCoordinator.getReaderSide(
-            readerTabID,
-            reader as any,
-          );
-          return readerSide || s.activeSide || null;
-        };
-        const contextMenuSide = isInSplitView ? getContextMenuSide() : null;
-
-        // Determine icon for the Split-View Reader toggle
-        const splitViewIcon = isInSplitView
-          ? this.getIconURI("do_not_splitscreen_vertical_24dp.svg")
-          : this.getIconURI("splitscreen_vertical_add_24dp.svg");
-
-        // Build a label-to-icon map for post-processing
-        // Use the actual label that will be shown (close or open)
-        const menuLabel = isInSplitView
-          ? this.getCloseViewMenuLabel()
-          : getString("splitview-menu-label");
-        const iconMap: Record<string, string> = {
-          [menuLabel]: splitViewIcon,
-        };
-
-        if (contextMenuSide && tabState) {
-          const { menuState, isCurrentPrimary } = this.getPrimaryMenuConfig(
-            tabState,
-            contextMenuSide,
-          );
-          const primaryLabel = this.getSetPrimaryMenuLabel(menuState);
-          iconMap[primaryLabel] = isCurrentPrimary
-            ? this.getIconURI("primary_window_24dp.svg")
-            : this.getIconURI("standby_24dp.svg");
-        } else if (isInSplitView) {
-          iconMap[this.getSetPrimaryMenuLabel("none")] =
-            this.getIconURI("standby_24dp.svg");
-        }
-
-        const menuItems: any[] = [];
-
-        // If we have an active split view, add additional options
-        if (isInSplitView && tabState) {
-          const getClickedSide = () => {
-            const s = this.stateMap.get(readerTabID);
-            if (!s || s.isCleaningUp) return null;
-            return (
-              this.readAloudCoordinator.getReaderSide(
-                readerTabID,
-                reader as any,
-              ) || s.activeSide
-            );
-          };
-
-          menuItems.push({
-            label: getString("splitview-swap-pdf"),
-            onCommand: async () => {
-              await this.swapPDFs(readerTabID);
-            },
-          });
-          iconMap[getString("splitview-swap-pdf")] = this.getIconURI(
-            "swap_horiz_24dp.svg",
-          );
-
-          menuItems.push({
-            label: getString("splitview-separate-views"),
-            onCommand: () => {
-              const clickedSide = getClickedSide();
-              if (clickedSide) {
-                this.separateViews(readerTabID, clickedSide);
-              }
-            },
-          });
-          iconMap[getString("splitview-separate-views")] =
-            this.getIconURI("separate_24dp.svg");
-
-          menuItems.push({
-            label: menuLabel,
-            onCommand: () => {
-              // Re-check state at command time to avoid stale references
-              const currentTabState = this.stateMap.get(readerTabID);
-              const currentlyInSplitView =
-                !!currentTabState && !currentTabState.isCleaningUp;
-
-              if (currentlyInSplitView) {
-                const clickedSide =
-                  this.readAloudCoordinator.getReaderSide(
-                    readerTabID,
-                    reader as any,
-                  ) ||
-                  currentTabState?.activeSide ||
-                  "right";
-                // Pass the side to close (the one we clicked on)
-                this.revertToSingleReader(readerTabID, clickedSide);
-              } else {
-                this.handleSplitView(reader);
-              }
-            },
-          });
-
-          const primaryMenuConfig = this.getPrimaryMenuConfig(
-            tabState,
-            contextMenuSide,
-          );
-          menuItems.push({
-            label: this.getSetPrimaryMenuLabel(primaryMenuConfig.menuState),
-            disabled: primaryMenuConfig.disabled,
-            onCommand: () => {
-              const s = this.stateMap.get(readerTabID);
-              const clickedSide = getClickedSide();
-              if (s && !s.isCleaningUp && clickedSide) {
-                const currentConfig = this.getPrimaryMenuConfig(s, clickedSide);
-                this.setPrimarySide(
-                  readerTabID,
-                  currentConfig.targetPrimarySide,
-                );
-              }
-            },
-          });
-
-          menuItems.push({
-            label: getString("splitview-open-another"),
-            onCommand: async () => {
-              const clickedSide = getClickedSide();
-              if (clickedSide) {
-                await this.selectAndLoadPDF(readerTabID, clickedSide);
-              }
-            },
-          });
-          iconMap[getString("splitview-open-another")] =
-            this.getIconURI("file_open_24dp.svg");
-
-          menuItems.push({
-            label: getString("splitview-sync-position"),
-            onCommand: () => {
-              const clickedSide = getClickedSide();
-              if (clickedSide) {
-                this.sync.syncPositionAndScale(readerTabID, clickedSide);
-              }
-            },
-          });
-          iconMap[getString("splitview-sync-position")] =
-            this.getIconURI("sync_24dp.svg");
-        } else {
-          // First item outside split view: "Split-View Reader" open action
-          menuItems.push({
-            label: menuLabel,
-            onCommand: () => {
-              this.handleSplitView(reader);
-            },
-          });
-        }
-
-        (append as any)(...menuItems);
-
-        // Post-process: Zotero's _openContextMenu doesn't support custom icon
-        // properties, so we add a one-time popupshowing listener to find the
-        // menuitems by label and apply our icon attributes after they are
-        // rendered into the DOM.
-        if (mainWindow) {
-          // eslint-disable-next-line @typescript-eslint/no-this-alias
-          const self = this;
-          const onPopupShowing = (e: Event) => {
-            const popup = e.target as Element;
-            if (!popup || popup.tagName?.toLowerCase() !== "menupopup") return;
-            const items = popup.querySelectorAll("menuitem");
-            let found = false;
-            let primaryItem: Element | null = null;
-            for (const item of items) {
-              const label = item.getAttribute("label");
-              if (label && iconMap[label]) {
-                found = true;
-                // Remove checkbox type if Zotero added one (from checked property)
-                item.removeAttribute("type");
-                item.removeAttribute("checked");
-                self.setMenuItemIcon(item, iconMap[label]);
-              }
-              if (
-                label &&
-                [
-                  self.getSetPrimaryMenuLabel("current"),
-                  self.getSetPrimaryMenuLabel("none"),
-                  self.getSetPrimaryMenuLabel("other"),
-                ].includes(label)
-              ) {
-                primaryItem = item;
-              }
-            }
-            if (primaryItem && contextMenuSide) {
-              popup.addEventListener(
-                "popupshown",
-                () => {
-                  mainWindow.setTimeout(() => {
-                    const s = self.stateMap.get(readerTabID);
-                    if (!s || s.isCleaningUp) return;
-                    self.activateSide(readerTabID, contextMenuSide, mainWindow);
-                    self.refreshPrimaryMenuItemElement(
-                      primaryItem as Element,
-                      readerTabID,
-                      contextMenuSide,
-                    );
-                  }, 0);
-                },
-                { once: true },
-              );
-            }
-            if (!found) {
-              // Not our popup — re-listen for the next one
-              mainWindow.document.addEventListener(
-                "popupshowing",
-                onPopupShowing,
-                { once: true },
-              );
-            }
-          };
-          mainWindow.document.addEventListener("popupshowing", onPopupShowing, {
-            once: true,
-          });
-        }
-      },
-      addon.data.config.addonID,
-    );
+    this.readerContextMenu.register(addon.data.config.addonID);
   }
 
   /**
@@ -614,6 +407,7 @@ export class SplitViewFactory {
    */
   static unregisterAll() {
     this.pdfSelector.dispose();
+    this.readerContextMenu.unregister();
     // Save view states for all active split views before cleanup.
     // This ensures PDF page/zoom positions are preserved when Zotero closes.
     for (const [_tabID, state] of this.stateMap.entries()) {
