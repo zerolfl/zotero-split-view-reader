@@ -33,6 +33,7 @@ import { SplitInteractions } from "./splitView/interactions";
 import { SplitViewCreationService } from "./splitView/creation";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
+import { SplitReaderPopupMenu } from "./splitView/readerPopupMenu";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { clearPref, getPref } from "../utils/prefs";
@@ -256,6 +257,36 @@ export class SplitViewFactory {
     writeSession: (state) => this.session.write(state),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     cleanup: (tabID) => this.cleanupTab(tabID),
+  });
+  private static readerPopupMenu = new SplitReaderPopupMenu({
+    isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
+    getMainWindow: () => Zotero.getMainWindow(),
+    getStates: () => this.stateMap.entries(),
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    getString: (key, options) =>
+      options
+        ? getString(key as Parameters<typeof getString>[0], options as any)
+        : getString(key as Parameters<typeof getString>[0]),
+    getIconURI: (name) => this.getIconURI(name),
+    setMenuItemIcon: (item, uri) => this.setMenuItemIcon(item, uri),
+    getCloseViewMenuLabel: () => this.getCloseViewMenuLabel(),
+    getOpenAnotherPDFMenuLabel: () => this.getOpenAnotherPDFMenuLabel(),
+    getSyncPositionMenuLabel: (side) => this.getSyncPositionMenuLabel(side),
+    getSetPrimaryMenuLabel: (state) => this.getSetPrimaryMenuLabel(state),
+    getPrimaryMenuConfig: (state, side) =>
+      this.primaryView.getMenuConfig(state, side),
+    swapPDFs: (tabID) => this.swapPDFs(tabID),
+    separateViews: (tabID, side) => void this.separateViews(tabID, side),
+    closeSide: (tabID, side) => void this.revertToSingleReader(tabID, side),
+    setPrimarySide: (tabID, side) => this.primaryView.setSide(tabID, side),
+    selectAndLoadPDF: (tabID, side) => this.selectAndLoadPDF(tabID, side),
+    syncPositionAndScale: (tabID, side) =>
+      this.sync.syncPositionAndScale(tabID, side),
+    activateSide: (tabID, side, win) =>
+      this.interactions.activateSide(tabID, side, win),
+    refreshPrimaryMenuItem: (item, tabID, side) =>
+      this.refreshPrimaryMenuItemElement(item, tabID, side),
+    schedule: (callback) => setTimeout(callback),
   });
   private static pdfSwap = new PDFSwapService({
     getState: (tabID) => this.stateMap.get(tabID) || null,
@@ -1062,200 +1093,7 @@ export class SplitViewFactory {
     popupset: XULElement,
     params: { x: number; y: number; itemGroups: any[][] },
   ) {
-    // Check if browser is still alive
-    if (!readerRuntime.isBrowserAlive(browser)) return;
-
-    const mainWindow = Zotero.getMainWindow();
-    const { x, y, itemGroups } = params;
-
-    const popup = mainWindow.document.createXULElement("menupopup");
-    popupset.appendChild(popup);
-
-    popup.addEventListener("popuphidden", function () {
-      popup.remove();
-    });
-
-    const appendItems = (parentNode: Element, groups: any[][]) => {
-      for (let i = 0; i < groups.length; i++) {
-        const itemGroup = groups[i];
-        for (const item of itemGroup) {
-          if (item.groups) {
-            // Submenu
-            const menu = mainWindow.document.createXULElement("menu");
-            menu.setAttribute("label", item.label);
-            const menupopup = mainWindow.document.createXULElement("menupopup");
-            menu.appendChild(menupopup);
-            appendItems(menupopup, item.groups);
-            parentNode.appendChild(menu);
-          } else {
-            // Menu item
-            const menuitem = mainWindow.document.createXULElement("menuitem");
-            menuitem.setAttribute("label", item.label);
-            if (item.disabled) {
-              menuitem.setAttribute("disabled", "true");
-            }
-            if (item.checked) {
-              menuitem.setAttribute("type", "checkbox");
-              menuitem.setAttribute("checked", "true");
-            }
-            menuitem.addEventListener("command", () => {
-              if (item.onCommand) item.onCommand();
-            });
-            parentNode.appendChild(menuitem);
-          }
-        }
-        // Add separator between groups (but not after the last group)
-        if (i < groups.length - 1) {
-          const separator =
-            mainWindow.document.createXULElement("menuseparator");
-          parentNode.appendChild(separator);
-        }
-      }
-    };
-
-    appendItems(popup, itemGroups);
-
-    // Add Split View menu items - find which tab state owns this browser
-    let ownerTabID: string | null = null;
-    for (const [tid, s] of this.stateMap) {
-      if (s.leftBrowser === browser || s.rightBrowser === browser) {
-        ownerTabID = tid;
-        break;
-      }
-    }
-    const ownerState = ownerTabID ? this.stateMap.get(ownerTabID) : null;
-    if (ownerState && ownerTabID) {
-      const separator = mainWindow.document.createXULElement("menuseparator");
-      popup.appendChild(separator);
-
-      // Determine which side this browser is on
-      const isLeft = browser === ownerState.leftBrowser;
-      const currentSide = isLeft ? "left" : "right";
-      const capturedTabID = ownerTabID;
-
-      // Swap PDFs (exchange left and right PDFs)
-      const swapItem = mainWindow.document.createXULElement("menuitem");
-      swapItem.setAttribute("label", getString("splitview-swap-pdf"));
-      this.setMenuItemIcon(swapItem, this.getIconURI("swap_horiz_24dp.svg"));
-      swapItem.addEventListener("command", async () => {
-        await this.swapPDFs(capturedTabID);
-      });
-      popup.appendChild(swapItem);
-
-      const separateItem = mainWindow.document.createXULElement("menuitem");
-      separateItem.setAttribute("label", getString("splitview-separate-views"));
-      this.setMenuItemIcon(separateItem, this.getIconURI("separate_24dp.svg"));
-      separateItem.addEventListener("command", () => {
-        this.separateViews(capturedTabID, currentSide);
-      });
-      popup.appendChild(separateItem);
-
-      // Close Split View (revert to single reader)
-      const closeItem = mainWindow.document.createXULElement("menuitem");
-      closeItem.setAttribute("label", this.getCloseViewMenuLabel());
-      this.setMenuItemIcon(
-        closeItem,
-        this.getIconURI("do_not_splitscreen_vertical_24dp.svg"),
-      );
-      closeItem.addEventListener("command", () => {
-        this.revertToSingleReader(capturedTabID, currentSide);
-      });
-      popup.appendChild(closeItem);
-
-      // Set Primary (right below Split-View Reader)
-      const primaryItem = mainWindow.document.createXULElement("menuitem");
-      const primaryMenuConfig = this.primaryView.getMenuConfig(
-        ownerState,
-        currentSide,
-      );
-      primaryItem.setAttribute(
-        "label",
-        this.getSetPrimaryMenuLabel(primaryMenuConfig.menuState),
-      );
-      if (primaryMenuConfig.disabled) {
-        primaryItem.setAttribute("disabled", "true");
-      }
-      this.setMenuItemIcon(
-        primaryItem,
-        this.getIconURI(
-          primaryMenuConfig.isCurrentPrimary
-            ? "primary_window_24dp.svg"
-            : "standby_24dp.svg",
-        ),
-      );
-      primaryItem.addEventListener("command", () => {
-        const s = this.stateMap.get(capturedTabID);
-        if (!s || s.isCleaningUp) return;
-        const currentConfig = this.primaryView.getMenuConfig(s, currentSide);
-        this.primaryView.setSide(
-          capturedTabID,
-          currentConfig.targetPrimarySide,
-        );
-      });
-      popup.appendChild(primaryItem);
-
-      // Replace the PDF on the side where the user right-clicked
-      const openAnotherItem = mainWindow.document.createXULElement("menuitem");
-      openAnotherItem.setAttribute("label", this.getOpenAnotherPDFMenuLabel());
-      this.setMenuItemIcon(
-        openAnotherItem,
-        this.getIconURI("file_open_24dp.svg"),
-      );
-      openAnotherItem.addEventListener("command", async () => {
-        await this.selectAndLoadPDF(capturedTabID, currentSide);
-      });
-      popup.appendChild(openAnotherItem);
-
-      // Sync Position and Scale
-      const syncPositionItem = mainWindow.document.createXULElement("menuitem");
-      syncPositionItem.setAttribute(
-        "label",
-        this.getSyncPositionMenuLabel(currentSide),
-      );
-      this.setMenuItemIcon(syncPositionItem, this.getIconURI("sync_24dp.svg"));
-      syncPositionItem.addEventListener("command", () => {
-        this.sync.syncPositionAndScale(capturedTabID, currentSide);
-      });
-      popup.appendChild(syncPositionItem);
-
-      popup.addEventListener(
-        "popupshown",
-        () => {
-          mainWindow.setTimeout(() => {
-            const s = this.stateMap.get(capturedTabID);
-            if (!s || s.isCleaningUp) return;
-            this.interactions.activateSide(
-              capturedTabID,
-              currentSide,
-              mainWindow,
-            );
-            this.refreshPrimaryMenuItemElement(
-              primaryItem,
-              capturedTabID,
-              currentSide,
-            );
-          }, 0);
-        },
-        { once: true },
-      );
-    }
-
-    // Calculate screen position
-    const browserRect = browser.getBoundingClientRect();
-    const screenX = browserRect.left + x;
-    const screenY = browserRect.top + y;
-
-    // Convert to screen coordinates
-    const windowUtils = (mainWindow as any).windowUtils;
-    if (windowUtils && windowUtils.toScreenRectInCSSUnits) {
-      const rect = windowUtils.toScreenRectInCSSUnits(screenX, screenY, 0, 0);
-      setTimeout(() => (popup as any).openPopupAtScreen(rect.x, rect.y, true));
-    } else {
-      // Fallback
-      setTimeout(() =>
-        (popup as any).openPopupAtScreen(screenX, screenY, true),
-      );
-    }
+    this.readerPopupMenu.open(browser, popupset, params);
   }
 
   /**
