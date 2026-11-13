@@ -34,6 +34,7 @@ import { SplitViewCreationService } from "./splitView/creation";
 import { SplitViewConversionService } from "./splitView/conversion";
 import { SplitViewShutdown } from "./splitView/shutdown";
 import { SplitTabResourceTracker } from "./splitView/resourceTracker";
+import { SplitReaderEntryFlow } from "./splitView/readerEntryFlow";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
@@ -510,6 +511,17 @@ export class SplitViewFactory {
     splitDifferentPDF: (reader, item) =>
       this.conversion.convertDifferentPDF(reader, item),
   });
+  private static readerEntryFlow = new SplitReaderEntryFlow({
+    getState: (tabID) => this.stateMap.get(tabID) || null,
+    cleanup: (tabID) => this.cleanupTab(tabID),
+    wait: (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    getItem: (itemID) => Zotero.Items.get(itemID) || null,
+    selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
+    convertSamePDF: (reader) => this.conversion.convertSamePDF(reader),
+    convertDifferentPDF: (reader, item) =>
+      this.conversion.convertDifferentPDF(reader, item),
+  });
   private static shutdown = new SplitViewShutdown({
     disposePDFSelector: () => this.pdfSelector.dispose(),
     unregisterReaderContextMenu: () => this.readerContextMenu.unregister(),
@@ -718,31 +730,7 @@ export class SplitViewFactory {
   }
 
   private static async handleSplitView(reader: any) {
-    const tabID = reader.tabID;
-    try {
-      // Clean up any stale state for THIS tab only
-      const existingState = this.stateMap.get(tabID);
-      if (existingState && !existingState.isCleaningUp) {
-        this.cleanupTab(tabID);
-      }
-
-      // Wait a bit for cleanup to complete
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      const currentItem = Zotero.Items.get(reader.itemID);
-      if (!currentItem) return;
-      const selectedPDF = await this.pdfSelector.select(currentItem.libraryID);
-      if (!selectedPDF) return;
-
-      if (selectedPDF.id === reader.itemID)
-        await this.conversion.convertSamePDF(reader);
-      else await this.conversion.convertDifferentPDF(reader, selectedPDF);
-    } catch {
-      const s = this.stateMap.get(tabID);
-      if (s && !s.isCleaningUp) {
-        this.cleanupTab(tabID);
-      }
-    }
+    await this.readerEntryFlow.open(reader);
   }
 
   /**
