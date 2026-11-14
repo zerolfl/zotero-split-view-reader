@@ -393,7 +393,8 @@ export class SplitViewFactory {
   private static conversion = new SplitViewConversionService({
     getMainWindow: () => Zotero.getMainWindow(),
     getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
-    getContainer: (win, tabID) => win.document.getElementById(tabID),
+    getContainer: (win, tabID) =>
+      this.splitReaderTab.getTabContainer(win, tabID),
     getViewState: (reader) => readerView.getViewStateFromReader(reader),
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
     closeReader: (reader) => readerRuntime.closeReaderWithoutClosingTab(reader),

@@ -49,6 +49,7 @@ function setup() {
   const oldContainer = new Element("tab-content");
   oldContainer.parentNode = parent;
   const doc = {
+    getElementById: (id) => (id === "reader-tab" ? oldContainer : null),
     createXULElement: (name) => new Element(name),
   };
   const win = {
@@ -78,8 +79,15 @@ function setup() {
     rightBrowser: shell.rightBrowser,
     isCleaningUp: false,
   };
-  return { calls, oldContainer, parent, replaced, shell, state };
+  return { adapter, calls, oldContainer, parent, replaced, shell, state, win };
 }
+
+test("looks up existing reader tab containers by tab ID", () => {
+  const { adapter, oldContainer, win } = setup();
+
+  assert.strictEqual(adapter.getTabContainer(win, "reader-tab"), oldContainer);
+  assert.equal(adapter.getTabContainer(win, "missing"), null);
+});
 
 test("creates a split tab shell and bridges Zotero tab-content methods", () => {
   const { calls, oldContainer, parent, replaced, shell } = setup();

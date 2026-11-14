@@ -30,6 +30,10 @@ export interface SplitReaderTabDependencies {
 export class SplitReaderTabAdapter {
   constructor(private readonly deps: SplitReaderTabDependencies) {}
 
+  getTabContainer(win: Window, tabID: string): Element | null {
+    return win.document.getElementById(tabID);
+  }
+
   create(
     win: Window,
     tabID: string,
