@@ -193,7 +193,13 @@ test("service registration is idempotent and unregister cancels queued dialogs",
   const { SplitReadAloudService } = load(
     "src/modules/splitView/readAloud.ts",
     globals,
-    { "../../platform/readAloud": platform },
+    {
+      "../../platform/readAloud": platform,
+      "../../platform/readerReadAloud": load(
+        "src/platform/readerReadAloud.ts",
+        globals,
+      ),
+    },
   );
   let opened = 0;
   mainWindow.openDialog = () => opened++;

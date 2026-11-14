@@ -1,4 +1,5 @@
 import type { SplitSide, SplitTabState } from "./types";
+import { readerReadAloud } from "../../platform/readerReadAloud";
 
 interface ReadAloudCoordinatorCallbacks {
   states: () => Iterable<SplitTabState>;
@@ -60,7 +61,7 @@ export class SplitReadAloudCoordinator {
 
   pauseBrowser(browser: XULBrowserElement, paused = true): void {
     try {
-      this.callbacks.getReader(browser)?.toggleReadAloudPaused?.(paused);
+      readerReadAloud.togglePaused(this.callbacks.getReader(browser), paused);
     } catch (error) {
       Zotero.debug(`Split view: pauseReadAloudInBrowser failed: ${error}`);
     }
@@ -173,7 +174,7 @@ export class SplitReadAloudCoordinator {
     const browser =
       targetSide === "left" ? state.leftBrowser : state.rightBrowser;
     try {
-      this.callbacks.getReader(browser)?.toggleReadAloudPaused?.();
+      readerReadAloud.togglePaused(this.callbacks.getReader(browser));
     } catch (error) {
       Zotero.debug(`Split view: toggleActiveReadAloud failed: ${error}`);
     }

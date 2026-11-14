@@ -4,6 +4,7 @@ import { SplitViewFactory } from "../src/modules/splitView";
 import { readerRuntime } from "../src/platform/readerRuntime";
 import { readerView } from "../src/platform/readerView";
 import { annotationStore } from "../src/platform/annotationStore";
+import { readerReadAloud } from "../src/platform/readerReadAloud";
 import { createPDFAttachment } from "./fixtures/pdf";
 
 describe("split reader integration", function () {
@@ -185,6 +186,31 @@ describe("split reader integration", function () {
     setPrimarySide(state.tabID, null);
     assert.isNull(getScrollbarStyle(state.leftBrowser));
     assert.isNull(getScrollbarStyle(state.rightBrowser));
+  });
+
+  it("updates supported reader voice settings and tolerates missing controls", async function () {
+    const state = await open(false);
+    const voices = { en: { voice: "test-voice", speed: 1 } };
+    const supportsReadAloud = Number.parseInt(Zotero.version) >= 9;
+
+    for (const browser of [state.leftBrowser, state.rightBrowser]) {
+      const reader = readerRuntime.getInternalReaderFromBrowser(browser);
+      const win = browser.contentWindow!;
+      assert.equal(
+        typeof reader.setReadAloudVoices,
+        supportsReadAloud ? "function" : "undefined",
+      );
+      readerReadAloud.setVoices(reader, win, voices);
+      readerReadAloud.setEnabledVoices(reader, win, {});
+      readerReadAloud.togglePaused(reader, true);
+
+      if (supportsReadAloud) {
+        const selected = reader._state.readAloudVoices.get("en");
+        assert.equal(selected.voice, "test-voice");
+        selected.speed = 2;
+        assert.equal(voices.en.speed, 1);
+      }
+    }
   });
 
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {

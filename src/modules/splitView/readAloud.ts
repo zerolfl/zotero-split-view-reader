@@ -1,4 +1,5 @@
 import * as platform from "../../platform/readAloud";
+import { readerReadAloud } from "../../platform/readerReadAloud";
 import type { SplitTabState } from "./types";
 
 interface ReadAloudReaders {
@@ -98,15 +99,13 @@ export class SplitReadAloudService {
   private syncVoices(): void {
     const voices = platform.getReadAloudVoices();
     this.forEachReader((reader, win) =>
-      reader.setReadAloudVoices?.(Components.utils.cloneInto(voices, win)),
+      readerReadAloud.setVoices(reader, win, voices),
     );
   }
 
   private syncEnabledVoices(voices: any): void {
     this.forEachReader((reader, win) =>
-      reader.setReadAloudEnabledVoices?.(
-        Components.utils.cloneInto(voices, win),
-      ),
+      readerReadAloud.setEnabledVoices(reader, win, voices),
     );
   }
 
@@ -175,7 +174,7 @@ export class SplitReadAloudService {
         platform.openReadAloudDialog("firstRun", io);
         if (io.dataOut && this.readers.isActive(browser)) {
           this.setVoice(io.dataOut);
-          this.readers.getReader(browser)?.toggleReadAloudPopup?.(true);
+          readerReadAloud.openPopup(this.readers.getReader(browser));
         }
       } finally {
         this.firstRunLanguages.delete(lang);

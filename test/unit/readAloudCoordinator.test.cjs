@@ -24,6 +24,12 @@ function createCoordinator(states) {
   const { SplitReadAloudCoordinator } = load(
     "src/modules/splitView/readAloudCoordinator.ts",
     { Zotero: { debug: () => {} } },
+    {
+      "../../platform/readerReadAloud": load(
+        "src/platform/readerReadAloud.ts",
+        {},
+      ),
+    },
   );
   const coordinator = new SplitReadAloudCoordinator({
     states: () => states,
