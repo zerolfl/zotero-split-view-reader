@@ -92,18 +92,25 @@ export class SplitInteractions {
       const keyupHandler = (event: KeyboardEvent) => {
         if (event.key === "Control") resetCtrlState();
       };
-      this.deps.trackEventListener(
-        state,
-        doc,
-        "keyup",
-        keyupHandler as EventListener,
-      );
-      this.deps.trackEventListener(
-        state,
-        wrappedWin,
-        "blur",
-        resetCtrlState as EventListener,
-      );
+      for (const document of [doc, wrappedReaderWin?.document]) {
+        if (!document) continue;
+        this.deps.trackEventListener(
+          state,
+          document,
+          "keyup",
+          keyupHandler as EventListener,
+          true,
+        );
+      }
+      for (const win of [wrappedWin, wrappedReaderWin]) {
+        if (!win) continue;
+        this.deps.trackEventListener(
+          state,
+          win,
+          "blur",
+          resetCtrlState as EventListener,
+        );
+      }
     } catch {
       // Ignore errors from unloaded reader documents.
     }

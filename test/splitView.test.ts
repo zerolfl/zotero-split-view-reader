@@ -213,6 +213,31 @@ describe("split reader integration", function () {
     }
   });
 
+  it("releases Ctrl in the reader toolbar document", async function () {
+    const state = await open(false);
+    for (const browser of [state.leftBrowser, state.rightBrowser]) {
+      const win = (browser.contentWindow as any).wrappedJSObject;
+      win.document.querySelector(".toolbar-button.find").focus();
+      const input = Components.classes[
+        "@mozilla.org/text-input-processor;1"
+      ].createInstance(Components.interfaces.nsITextInputProcessor);
+      assert.isTrue(input.beginInputTransactionForTests(browser.contentWindow));
+      const control = () =>
+        new KeyboardEvent("", {
+          key: "Control",
+          code: "ControlLeft",
+          keyCode: 17,
+        });
+      try {
+        input.keydown(control());
+        assert.isTrue(state.ctrlPressed, "reader keydown records Ctrl");
+      } finally {
+        input.keyup(control());
+      }
+      assert.isFalse(state.ctrlPressed, "reader keyup releases Ctrl");
+    }
+  });
+
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
     const state = await open(true);
     setPrimarySide(state.tabID, null);

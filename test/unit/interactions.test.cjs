@@ -47,7 +47,9 @@ function setup() {
     },
     contentWindow: {
       document: readerDocument,
-      wrappedJSObject: { document: readerDocument },
+      wrappedJSObject: Object.assign(eventTarget(), {
+        document: readerDocument,
+      }),
     },
   });
   const rightBrowser = Object.assign(eventTarget(), {
@@ -137,7 +139,7 @@ function setup() {
   return rt;
 }
 
-test("Ctrl key state resets on keyup and PDF iframe blur", () => {
+test("Ctrl key state resets in both reader documents and on window blur", () => {
   const rt = setup();
   rt.interactions.setupCtrlKeyListener("tab", rt.state.leftBrowser);
 
@@ -147,10 +149,16 @@ test("Ctrl key state resets on keyup and PDF iframe blur", () => {
   assert.equal(rt.state.ctrlPressed, false);
   rt.readerDocument.dispatch("keydown", { key: "Control" });
   assert.equal(rt.state.ctrlPressed, true);
+  rt.readerDocument.dispatch("keyup", { key: "Control" });
+  assert.equal(rt.state.ctrlPressed, false);
+  rt.readerDocument.dispatch("keydown", { key: "Control" });
+  rt.state.leftBrowser.contentWindow.wrappedJSObject.dispatch("blur");
+  assert.equal(rt.state.ctrlPressed, false);
+  rt.leftDocument.dispatch("keydown", { key: "Control" });
   rt.iframeWindow.dispatch("blur");
   assert.equal(rt.state.ctrlPressed, false);
-  assert.equal(rt.syncCalls.filter(([name]) => name === "init").length, 2);
-  assert.equal(rt.state.eventListeners.length, 4);
+  assert.equal(rt.syncCalls.filter(([name]) => name === "init").length, 4);
+  assert.equal(rt.state.eventListeners.length, 6);
 });
 
 test("context pane observer replaces the old observer and mirrors collapse state", () => {
