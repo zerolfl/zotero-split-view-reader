@@ -67,19 +67,46 @@ describe("command palette shortcut integration", function () {
     const addon = Zotero[config.addonInstance];
     const previousPrefs = addon.data.prefs;
     const doc = win.document.implementation.createHTMLDocument();
-    const value = doc.createElement("span");
+    const value = doc.createElement("input");
     value.id = `zotero-prefpane-${config.addonRef}-command-shortcut-value`;
     const record = doc.createElement("button");
     record.id = `zotero-prefpane-${config.addonRef}-command-shortcut-record`;
+    const cancel = doc.createElement("button");
+    cancel.id = `zotero-prefpane-${config.addonRef}-command-shortcut-cancel`;
     const reset = doc.createElement("button");
     reset.id = `zotero-prefpane-${config.addonRef}-command-shortcut-reset`;
     const description = doc.createElement("div");
     description.id = `zotero-prefpane-${config.addonRef}-command-shortcut-desc`;
-    doc.body.append(value, record, reset, description);
+    doc.body.append(value, record, cancel, reset, description);
     const prefsWindow = { document: doc } as unknown as Window;
 
     try {
       await addon.hooks.onPrefsEvent("load", { window: prefsWindow });
+      record.click();
+      assert.isTrue(record.hidden);
+      assert.isFalse(cancel.hidden);
+      assert.isFalse(value.value.includes("zotero-split-view-reader"));
+      cancel.click();
+      assert.isFalse(record.hidden);
+      assert.isTrue(cancel.hidden);
+      assert.equal(value.value, originalShortcut);
+
+      record.click();
+      const cancelEvent = new win.KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true,
+      });
+      doc.dispatchEvent(cancelEvent);
+      assert.isTrue(cancelEvent.defaultPrevented);
+      assert.equal(getPref("commandPaletteShortcut"), originalShortcut);
+
+      record.click();
+      const outside = doc.createElement("div");
+      doc.body.appendChild(outside);
+      outside.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
+      assert.isFalse(record.hidden);
+      assert.isTrue(cancel.hidden);
+
       record.click();
       const openEvent = new win.KeyboardEvent("keydown", {
         key: "P",
@@ -98,10 +125,10 @@ describe("command palette shortcut integration", function () {
       doc.dispatchEvent(captureEvent);
       assert.isTrue(captureEvent.defaultPrevented);
       assert.equal(getPref("commandPaletteShortcut"), "Ctrl+Alt+K");
-      assert.equal(value.textContent, "Ctrl+Alt+K");
+      assert.equal(value.value, "Ctrl+Alt+K");
       reset.click();
       assert.equal(getPref("commandPaletteShortcut"), "Shift+P");
-      assert.equal(value.textContent, "Shift+P");
+      assert.equal(value.value, "Shift+P");
     } finally {
       reset.click();
       addon.data.prefs = previousPrefs;

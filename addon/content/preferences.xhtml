@@ -3,7 +3,13 @@
   <html:style>
     .svr-section-title { margin: 20px 0 8px 0; } .svr-setting-row { margin: 0; }
     .svr-setting-desc { font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 0; }
-    .svr-inline-label { margin-right: 8px; }
+    .svr-inline-label { margin-right: 8px; } .svr-shortcut-label { white-space:
+    nowrap; } .svr-shortcut-value { box-sizing: border-box; width: 132px;
+    padding: 4px 8px; border: 1px solid var(--fill-quaternary, #aaa);
+    border-radius: 5px; background: var(--material-background, #fff);
+    text-align: center; font: 0.95em monospace; }
+    .svr-shortcut-value[data-recording="true"] { color: var(--color-accent,
+    #1769c2); } .svr-shortcut-button { margin-left: 6px; }
   </html:style>
 </linkset>
 <groupbox
@@ -23,22 +29,35 @@
     class="svr-setting-row"
   />
   <description data-l10n-id="pref-follow-focus-desc" class="svr-setting-desc" />
-  <hbox align="center" class="svr-setting-row">
+  <hbox align="center" class="svr-setting-row svr-shortcut-row">
     <html:label
       data-l10n-id="pref-command-shortcut"
-      class="svr-inline-label"
+      class="svr-inline-label svr-shortcut-label"
     ></html:label>
-    <html:span
+    <html:input
       id="zotero-prefpane-__addonRef__-command-shortcut-value"
-    ></html:span>
+      type="text"
+      readonly="true"
+      class="svr-shortcut-value"
+      aria-live="polite"
+    />
     <html:button
       id="zotero-prefpane-__addonRef__-command-shortcut-record"
       type="button"
+      class="svr-shortcut-button"
       data-l10n-id="pref-command-shortcut-record"
+    ></html:button>
+    <html:button
+      id="zotero-prefpane-__addonRef__-command-shortcut-cancel"
+      type="button"
+      class="svr-shortcut-button"
+      hidden="true"
+      data-l10n-id="pref-command-shortcut-cancel"
     ></html:button>
     <html:button
       id="zotero-prefpane-__addonRef__-command-shortcut-reset"
       type="button"
+      class="svr-shortcut-button"
       data-l10n-id="pref-command-shortcut-reset"
     ></html:button>
   </hbox>

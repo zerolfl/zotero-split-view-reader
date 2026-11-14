@@ -53,6 +53,7 @@ describe(`startup (Zotero ${clientVersion})`, function () {
       "pref-command-shortcut",
       "pref-command-shortcut-record",
       "pref-command-shortcut-reset",
+      "pref-command-shortcut-cancel",
     ]) {
       const [message] = preferenceLocale.formatMessagesSync([
         { id: `${config.addonRef}-${id}` },

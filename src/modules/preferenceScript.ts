@@ -145,9 +145,11 @@ function syncCommandShortcut(doc: Document) {
   const value = doc.querySelector(
     `#zotero-prefpane-${config.addonRef}-command-shortcut-value`,
   );
-  if (value)
-    value.textContent =
-      getPref("commandPaletteShortcut") || DEFAULT_COMMAND_SHORTCUT;
+  if (!value) return;
+  const shortcut =
+    getPref("commandPaletteShortcut") || DEFAULT_COMMAND_SHORTCUT;
+  if ("value" in value) (value as HTMLInputElement).value = shortcut;
+  else value.textContent = shortcut;
 }
 
 function bindCommandShortcutEvents(doc: Document) {
@@ -157,10 +159,14 @@ function bindCommandShortcutEvents(doc: Document) {
   const resetButton = doc.querySelector(
     `#zotero-prefpane-${config.addonRef}-command-shortcut-reset`,
   ) as HTMLButtonElement | null;
-  const description = doc.querySelector(
-    `#zotero-prefpane-${config.addonRef}-command-shortcut-desc`,
-  );
-  if (!recordButton || !resetButton) return;
+  const cancelButton = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-cancel`,
+  ) as HTMLButtonElement | null;
+  if (!recordButton || !resetButton || !cancelButton) return;
+
+  const value = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-value`,
+  ) as HTMLInputElement | null;
 
   const stopCapture = () => {
     cancelCommandShortcutCapture?.();
@@ -169,54 +175,70 @@ function bindCommandShortcutEvents(doc: Document) {
 
   recordButton.addEventListener("click", () => {
     stopCapture();
-    recordButton.textContent = getString("pref-command-shortcut-recording");
-    if (description)
-      description.textContent = getString("pref-command-shortcut-desc");
-
+    recordButton.hidden = true;
+    cancelButton.hidden = false;
+    if (value) {
+      value.value = "…";
+      value.dataset.recording = "true";
+      value.focus();
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.isComposing || event.repeat) return;
       if (event.key === "Escape") {
         stopCapture();
-        recordButton.textContent = getString("pref-command-shortcut-record");
         return;
       }
+      if (["Control", "Alt", "Shift", "Meta", "OS"].includes(event.key)) return;
 
       const shortcut = formatShortcut(event);
-      if (!shortcut) {
-        if (description)
-          description.textContent = getString(
-            "pref-command-shortcut-modifier-required",
-          );
-        return;
-      }
+      if (!shortcut) return;
 
       setPref("commandPaletteShortcut", shortcut);
       syncCommandShortcut(doc);
       stopCapture();
-      recordButton.textContent = getString("pref-command-shortcut-record");
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        (recordButton.contains(target) ||
+          cancelButton.contains(target) ||
+          resetButton.contains(target))
+      )
+        return;
+      stopCapture();
     };
 
     const cancel = () => {
       doc.removeEventListener("keydown", onKeyDown, true);
+      doc.removeEventListener("mousedown", onMouseDown, true);
       doc.defaultView?.removeEventListener("pagehide", cancel);
       setShortcutCaptureActive(false);
+      recordButton.hidden = false;
+      cancelButton.hidden = true;
+      if (value) {
+        value.dataset.recording = "false";
+        syncCommandShortcut(doc);
+      }
       if (cancelCommandShortcutCapture === cancel)
         cancelCommandShortcutCapture = null;
-      if (description)
-        description.textContent = getString("pref-command-shortcut-desc");
     };
     cancelCommandShortcutCapture = cancel;
     setShortcutCaptureActive(true);
     doc.addEventListener("keydown", onKeyDown, true);
+    doc.addEventListener("mousedown", onMouseDown, true);
     doc.defaultView?.addEventListener("pagehide", cancel, { once: true });
   });
+
+  cancelButton.addEventListener("click", stopCapture);
 
   resetButton.addEventListener("click", () => {
     stopCapture();
     setPref("commandPaletteShortcut", DEFAULT_COMMAND_SHORTCUT);
     syncCommandShortcut(doc);
-    recordButton.textContent = getString("pref-command-shortcut-record");
   });
 }
 
