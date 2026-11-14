@@ -515,7 +515,10 @@ describe("split reader integration", function () {
         );
         assert.ok(key, errors.join("; "));
         const params = new URL(key.url).searchParams;
-        assert.equal(params.get("cacheVersion"), "1");
+        assert.equal(
+          params.get("cacheVersion"),
+          Number.parseInt(Zotero.version) >= 10 ? "1" : "undefined",
+        );
         assert.equal(params.get("timestamps"), "1");
         assert.equal(
           (await cache.match(key)).headers.get("X-Zotero-Timestamps"),

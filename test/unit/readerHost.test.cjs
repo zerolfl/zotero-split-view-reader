@@ -12,6 +12,8 @@ test("reader host builds localized config, clones it and runs callbacks after re
   let saveCompleted = 0;
   let contextPaneToggled = 0;
   let launchedURL;
+  let annotationPending;
+  let annotationStarted;
   const fetchedFtl = [];
   const zotero = { launchURL: (url) => (launchedURL = url) };
   const win = {
@@ -62,7 +64,11 @@ test("reader host builds localized config, clones it and runs callbacks after re
       },
       "../../platform/annotationStore": {
         annotationStore: {
-          load: async () => [{ id: "annotation" }],
+          load: async () => {
+            annotationStarted?.();
+            if (annotationPending) await annotationPending;
+            return [{ id: "annotation" }];
+          },
           isReadOnly: () => false,
         },
       },
@@ -141,6 +147,29 @@ test("reader host builds localized config, clones it and runs callbacks after re
   await assert.rejects(
     host.initialize({ ...options, isActive: () => false }),
     /initialization cancelled/,
+  );
+  assert.equal(ready, 1);
+  const previousConfig = config;
+  let active = true;
+  let release;
+  annotationPending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const loading = new Promise((resolve) => {
+    annotationStarted = resolve;
+  });
+  const initialization = host.initialize({
+    ...options,
+    isActive: () => active,
+  });
+  await loading;
+  active = false;
+  release();
+  await assert.rejects(initialization, /initialization cancelled/);
+  assert.strictEqual(
+    config,
+    previousConfig,
+    "late data must not create a reader",
   );
   assert.equal(ready, 1);
 });
