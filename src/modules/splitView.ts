@@ -56,6 +56,7 @@ import { SplitReaderInitialization } from "./splitView/readerInitialization";
 import { SplitViewNotifications } from "./splitView/notifications";
 import { SplitReaderToolbar } from "./splitView/readerToolbar";
 import { SplitViewDelayedSetup } from "./splitView/delayedSetup";
+import { SplitViewRegistration } from "./splitView/registration";
 import { libraryPane } from "../platform/libraryPane";
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
@@ -582,34 +583,45 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
+  private static registration = new SplitViewRegistration({
+    registerSessionRestore: () => this.session.register(),
+    registerTitleItemNotifier: () => this.tabTitles.registerItemNotifier(),
+    registerReaderContextMenu: () =>
+      this.readerContextMenu.register(addon.data.config.addonID),
+    registerTabLookup: (win) => {
+      this.tabHooks.register(win);
+      this.tabContextMenu.register(win);
+    },
+    clearLegacySyncPreference: () => clearPref("syncEnabled"),
+    registerScrollbarPreferences: (prefix) =>
+      this.splitScrollbar.registerObservers(prefix),
+    registerTitlePreference: (name) =>
+      this.tabTitles.registerPreferenceObserver(name),
+    registerReadAloud: () => this.readAloud.register(),
+    registerCommandPalette: (win) =>
+      commandPalette.register(win, () => this.commandEntry.execute(win)),
+    unregisterAll: () => this.shutdown.unregisterAll(),
+  });
   static refreshOpenSplitViewTabTitles(): void {
     this.tabTitles.refreshOpenTabs();
   }
 
   static registerSplitTabTitleItemNotifier() {
-    this.tabTitles.registerItemNotifier();
-  }
-
-  private static clearLegacySyncEnabledPref(): void {
-    // The standalone syncEnabled pref was removed. Existing tabs restore their
-    // old sync state from session data, so new split views should no longer
-    // consult this hidden pref as a long-term default.
-    clearPref("syncEnabled");
+    this.registration.registerTitleItemNotifier();
   }
 
   static registerContextMenu() {
-    this.readerContextMenu.register(addon.data.config.addonID);
+    this.registration.registerReaderContextMenu();
   }
 
   /**
    * Hook into Zotero_Tabs.getTabIDByItemID to support finding tabs by right-side itemID
    */
   static registerTabLookup(win: Window = Zotero.getMainWindow()) {
-    this.tabHooks.register(win);
-    this.tabContextMenu.register(win);
+    this.registration.registerTabLookup(win);
   }
   static registerSessionRestore() {
-    this.session.register();
+    this.registration.registerSessionRestore();
   }
 
   /**
@@ -617,14 +629,7 @@ export class SplitViewFactory {
    * take effect immediately on all existing split view tabs.
    */
   static registerPrefObservers() {
-    const prefix = config.prefsPrefix;
-    this.clearLegacySyncEnabledPref();
-
-    this.splitScrollbar.registerObservers(prefix);
-
-    this.tabTitles.registerPreferenceObserver(`${prefix}.splitTabsTitle`);
-
-    this.readAloud.register();
+    this.registration.registerPreferences(config.prefsPrefix);
   }
 
   /**
@@ -633,7 +638,7 @@ export class SplitViewFactory {
    * in the library or any other tab it enters the two-step PDF selection flow.
    */
   static registerCommandPalette(win: Window) {
-    commandPalette.register(win, () => this.commandEntry.execute(win));
+    this.registration.registerCommandPalette(win);
   }
 
   /**
@@ -641,7 +646,7 @@ export class SplitViewFactory {
    * This should be called during plugin shutdown.
    */
   static unregisterAll() {
-    this.shutdown.unregisterAll();
+    this.registration.unregisterAll();
   }
 
   /**
