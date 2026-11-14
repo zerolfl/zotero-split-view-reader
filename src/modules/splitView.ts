@@ -148,7 +148,7 @@ export class SplitViewFactory {
       attachmentState.saveViewStateToDisk(itemID, viewState),
     cleanup: (tabID) => this.cleanupTabResources(tabID),
     prepareSingleReaderClose: (tabID, itemID) =>
-      this.prepareTabDataForSingleReaderClose(tabID, itemID),
+      this.session.prepareClose(tabID, itemID),
     showClosed: () => this.notifications.showClosed(),
     debug: (message) => Zotero.debug(message),
   });
@@ -223,8 +223,9 @@ export class SplitViewFactory {
       this.menuPresentation.refreshPrimaryMenuItem(item, id, side),
   });
   private static session = new SplitSession(
-    (id, data) => this.restoreSplitViewFromSession(id, data),
+    (id, data) => this.sessionRestore.restore(id, data),
     (id) => this.stateStore.hasActive(id),
+    (id) => this.stateStore.get(id),
   );
   private static layout = new SplitLayout(
     (id) => this.stateStore.get(id),
@@ -276,7 +277,7 @@ export class SplitViewFactory {
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     initSyncState: (tabID) => this.sync.initSyncState(tabID),
     startSyncPolling: (tabID) => this.sync.startSyncPolling(tabID),
-    updateSession: (tabID) => this.updateTabDataForSession(tabID),
+    updateSession: (tabID) => this.session.writeTab(tabID),
   });
   private static splitScrollbar = new SplitScrollbar({
     getState: (tabID) => this.stateStore.get(tabID) || null,
@@ -459,7 +460,7 @@ export class SplitViewFactory {
     updateContextPane: (tabID, win, itemID) =>
       splitContextPane.updateItem(tabID, win, itemID),
     bindAnnotations: (state) => bindSplitAnnotations(state),
-    updateSession: (tabID) => this.updateTabDataForSession(tabID),
+    updateSession: (tabID) => this.session.writeTab(tabID),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
       this.delayedSetup.restartSync(tabID, state),
@@ -483,7 +484,7 @@ export class SplitViewFactory {
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
     bindAnnotations: (state) => bindSplitAnnotations(state),
-    updateSession: (tabID) => this.updateTabDataForSession(tabID),
+    updateSession: (tabID) => this.session.writeTab(tabID),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
     scheduleSyncRestart: (tabID, state) =>
       this.delayedSetup.restartSync(tabID, state),
@@ -510,7 +511,7 @@ export class SplitViewFactory {
         ratio,
       ),
     updateScrollbarColors: (tabID) => this.splitScrollbar.update(tabID),
-    writeSession: (tabID) => this.updateTabDataForSession(tabID),
+    writeSession: (tabID) => this.session.writeTab(tabID),
     debug: (message) => Zotero.debug(message),
   });
   private static pdfSelector = new PDFSelector();
@@ -646,23 +647,6 @@ export class SplitViewFactory {
   /**
    * Restore split view from saved session data
    */
-  private static async restoreSplitViewFromSession(
-    tabID: string,
-    savedData: any,
-  ) {
-    await this.sessionRestore.restore(tabID, savedData);
-  }
-  private static updateTabDataForSession(tabID: string) {
-    const state = this.stateStore.get(tabID);
-    if (state) this.session.write(state);
-  }
-  private static prepareTabDataForSingleReaderClose(
-    tabID: string,
-    itemID: number,
-  ) {
-    this.session.prepareClose(tabID, itemID);
-  }
-
   /**
    * Select and load a new PDF in the secondary (non-primary) window
    */

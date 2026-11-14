@@ -11,6 +11,7 @@ export class SplitSession {
   constructor(
     private readonly restore: (id: string, data: any) => Promise<void>,
     private readonly isActive: (id: string) => boolean,
+    private readonly getState: (id: string) => SplitTabState | undefined,
   ) {}
 
   register(): void {
@@ -60,6 +61,11 @@ export class SplitSession {
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.restoring.clear();
+  }
+
+  writeTab(tabID: string): void {
+    const state = this.getState(tabID);
+    if (state) this.write(state);
   }
 
   write(state: SplitTabState): void {

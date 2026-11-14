@@ -5,6 +5,7 @@ const { load } = require("./helpers.cjs");
 function runtime() {
   const timers = new Map();
   const records = new Map();
+  const states = new Map();
   const restores = [];
   const visible = new Map();
   let loadListener;
@@ -56,11 +57,13 @@ function runtime() {
       restores.push(id);
     },
     () => false,
+    (id) => states.get(id),
   );
   return {
     session,
     timers,
     records,
+    states,
     restores,
     visible,
     load: (id, data) => loadListener(id, data),
@@ -89,12 +92,12 @@ test("session restoration deduplicates a loaded tab and cancels queued work on u
   assert.equal(rt.unsubscribed(), true);
 });
 
-test("session data keeps both positions and normal-reader close removes split fields", () => {
-  const { session, records, visible } = runtime();
+test("session data writes by tab ID and normal-reader close removes split fields", () => {
+  const { session, records, visible, states } = runtime();
   const leftBrowser = {};
   visible.set(leftBrowser, { pageIndex: 5 });
   records.set("split", { syncEnabled: true, unrelated: "keep" });
-  session.write({
+  states.set("split", {
     tabID: "split",
     container: {},
     leftBrowser,
@@ -107,6 +110,8 @@ test("session data keeps both positions and normal-reader close removes split fi
     leftViewState: { pageIndex: 0, lastReadAloudPosition: { pageIndex: 2 } },
     rightViewState: { pageIndex: 1 },
   });
+  session.writeTab("split");
+  session.writeTab("missing");
   assert.equal(records.get("split").leftViewState.pageIndex, 5);
   assert.equal(
     records.get("split").leftViewState.lastReadAloudPosition.pageIndex,
