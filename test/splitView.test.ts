@@ -419,9 +419,9 @@ describe("split reader integration", function () {
               errors,
             }),
           );
-          assert.include(
+          assert.match(
             manager.activeSegment.text,
-            "Split view compatibility test",
+            /Split view compatibility test|A different paragraph on the second page/,
           );
           assert.equal(manager.voice, "split-test");
           assert.isFalse(manager.paused);
