@@ -746,26 +746,6 @@ export class SplitViewFactory {
     this.tabCleanup.cleanupAndSave(tabID);
   }
 
-  /**
-   * Close split tab
-   */
-  private static closeSplitTab(tabID: string) {
-    const state = this.stateStore.get(tabID);
-    if (!state) return;
-
-    this.cleanupTab(tabID);
-
-    try {
-      const win = Zotero.getMainWindow();
-      const Zotero_Tabs = tabsForWindow(win);
-      Zotero_Tabs.close(tabID);
-    } catch {
-      // Ignore errors
-    }
-
-    this.notifications.showClosed();
-  }
-
   // NOTE: The old singleton cleanup() method has been replaced by:
   // - cleanupTab(tabID): saves state + cleans up resources for a specific tab
   // - cleanupTabResources(tabID): cleans up resources only (no state save)

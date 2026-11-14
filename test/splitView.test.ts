@@ -41,7 +41,7 @@ describe("split reader integration", function () {
   afterEach(async function () {
     Zotero.logError = logError;
     for (const tabID of [...factory.stateStore.keys()])
-      factory.closeSplitTab(tabID);
+      factory.cleanupTab(tabID);
     const tabs = Zotero.getMainWindow().Zotero_Tabs;
     for (const tab of [...(tabs as any)._tabs]) {
       if (tab.type.startsWith("reader")) tabs.close(tab.id);
@@ -211,18 +211,19 @@ describe("split reader integration", function () {
     );
     state.splitRatio = 0.35;
     state.activeSide = "right";
-    factory.updateTabDataForSession(state.tabID);
+    factory.session.writeTab(state.tabID);
     const tabs = Zotero.getMainWindow().Zotero_Tabs as any;
     const saved = JSON.parse(
       JSON.stringify(tabs._getTab(state.tabID).tab.data),
     );
     assert.equal(saved.leftViewState.pageIndex, 1, "saved left position");
     assert.equal(saved.rightViewState.pageIndex, 0, "saved right position");
-    factory.closeSplitTab(state.tabID);
+    factory.cleanupTab(state.tabID);
+    tabs.close(state.tabID);
     const ordinary = await Zotero.Reader.open(left.id);
     await readerRuntime.waitForReaderReady(ordinary);
     tabs.setTabData(ordinary!.tabID, saved);
-    await factory.restoreSplitViewFromSession(ordinary!.tabID, saved);
+    await factory.sessionRestore.restore(ordinary!.tabID, saved);
     const restored = factory.stateStore.get(ordinary!.tabID);
     assert.strictEqual(restored.primarySide, null);
     assert.equal(restored.activeSide, "right");
