@@ -28,6 +28,7 @@
     "release": "zotero-plugin release",
     "test": "zotero-plugin test",
     "test:compat": "node scripts/test-compat.mjs",
+    "test:restart": "node scripts/test-restart.mjs",
     "test:unit": "node --test test/unit/*.test.cjs",
     "update-deps": "npm update --save"
   },

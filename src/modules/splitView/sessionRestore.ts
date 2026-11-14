@@ -40,15 +40,8 @@ export class SplitSessionRestore {
       return;
     }
 
-    const {
-      leftItemID,
-      rightItemID,
-      isSamePDF,
-      splitRatio,
-      syncEnabled: legacySyncEnabled,
-      primarySide,
-      activeSide,
-    } = savedData;
+    const restoredData = { ...savedData };
+    const { leftItemID, rightItemID, isSamePDF } = restoredData;
     if (
       !this.deps.itemExists(leftItemID) ||
       !this.deps.itemExists(rightItemID)
@@ -70,13 +63,13 @@ export class SplitSessionRestore {
       `Split view: Restoring split view for tab ${tabID} (isSamePDF: ${isSamePDF})`,
     );
     if (isSamePDF) {
-      await this.deps.convertSamePDF(reader, savedData);
+      await this.deps.convertSamePDF(reader, restoredData);
     } else {
-      await this.deps.convertDifferentPDF(reader, rightItem, savedData);
+      await this.deps.convertDifferentPDF(reader, rightItem, restoredData);
     }
 
     const state = this.deps.getState(tabID);
-    if (state) this.restoreSettings(tabID, state, savedData);
+    if (state) this.restoreSettings(tabID, state, restoredData);
     this.deps.debug(
       `Split view: Successfully restored split view for tab ${tabID}`,
     );

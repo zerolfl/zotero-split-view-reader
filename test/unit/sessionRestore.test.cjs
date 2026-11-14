@@ -4,7 +4,12 @@ const { load } = require("./helpers.cjs");
 
 const { SplitSessionRestore } = load("src/modules/splitView/sessionRestore.ts");
 
-function setup({ reader = {}, existingState = false, items = [1, 2] } = {}) {
+function setup({
+  reader = {},
+  existingState = false,
+  items = [1, 2],
+  onConvert = () => {},
+} = {}) {
   const events = [];
   const leftItem = { id: 1 };
   const rightItem = { id: 2 };
@@ -24,8 +29,14 @@ function setup({ reader = {}, existingState = false, items = [1, 2] } = {}) {
     hasState: () => existingState,
     itemExists: (id) => itemsByID.has(id),
     getItem: (id) => itemsByID.get(id) || null,
-    convertSamePDF: async (...args) => events.push(["same", ...args]),
-    convertDifferentPDF: async (...args) => events.push(["different", ...args]),
+    convertSamePDF: async (...args) => {
+      events.push(["same", ...args]);
+      onConvert();
+    },
+    convertDifferentPDF: async (...args) => {
+      events.push(["different", ...args]);
+      onConvert();
+    },
     getState: () => state,
     updateBrowserFlex: (...args) => events.push(["flex", ...args]),
     updateScrollbarColors: (id) => events.push(["scrollbar", id]),
@@ -56,7 +67,8 @@ test("restores a same-PDF split after reader initialization and reapplies settin
   assert.equal(events[0], "initialized");
   assert.equal(fixture.events[1][0], "same");
   assert.strictEqual(fixture.events[1][1], reader);
-  assert.strictEqual(fixture.events[1][2], savedData);
+  assert.notStrictEqual(fixture.events[1][2], savedData);
+  assert.deepEqual({ ...fixture.events[1][2] }, savedData);
   assert.equal(fixture.state.splitRatio, 0.65);
   assert.equal(fixture.state.primarySide, null);
   assert.equal(fixture.state.activeSide, "right");
@@ -83,7 +95,8 @@ test("restores different PDFs and migrates the legacy disabled-sync flag", async
 
   assert.equal(fixture.events[1][0], "different");
   assert.strictEqual(fixture.events[1][2], fixture.rightItem);
-  assert.strictEqual(fixture.events[1][3], savedData);
+  assert.notStrictEqual(fixture.events[1][3], savedData);
+  assert.deepEqual({ ...fixture.events[1][3] }, savedData);
   assert.equal(fixture.state.splitRatio, 0.5);
   assert.equal(fixture.state.primarySide, null);
   assert.equal(fixture.state.activeSide, "left");
@@ -108,6 +121,31 @@ test("skips restoration for a missing reader, existing split or missing item", a
   const missingItem = setup({ items: [1] });
   await missingItem.service.restore("tab", { leftItemID: 1, rightItemID: 2 });
   assert.match(missingItem.events[0][1], /items no longer exist/);
+});
+
+test("preserves saved settings when reader creation rewrites live tab data", async () => {
+  for (const isSamePDF of [true, false]) {
+    const savedData = {
+      leftItemID: 1,
+      rightItemID: isSamePDF ? 1 : 2,
+      isSamePDF,
+      splitRatio: 0.65,
+      primarySide: null,
+      activeSide: "right",
+    };
+    const fixture = setup({
+      onConvert: () =>
+        Object.assign(savedData, {
+          splitRatio: 0.5,
+          primarySide: "left",
+          activeSide: "left",
+        }),
+    });
+    await fixture.service.restore("tab", savedData);
+    assert.equal(fixture.state.splitRatio, 0.65);
+    assert.equal(fixture.state.primarySide, null);
+    assert.equal(fixture.state.activeSide, "right");
+  }
 });
 
 test("propagates a failed reader initialization before restoring session data", async () => {
