@@ -25,18 +25,19 @@ class CommandPalette {
         run,
       );
     const key = (event: KeyboardEvent) => {
-      if (
-        event.repeat ||
-        !event.shiftKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.metaKey ||
-        event.key.toLowerCase() !== "p"
-      )
+      if (event.repeat || event.altKey || event.key.toLowerCase() !== "p")
         return;
       const target = (event as any).originalTarget || event.target;
       if (target?.isContentEditable || (target && "value" in target)) return;
-      if (registerLegacy() || event.defaultPrevented) return;
+      const legacy = registerLegacy();
+      if (
+        !event.shiftKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        legacy ||
+        event.defaultPrevented
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       if (view.isOpen) view.close();

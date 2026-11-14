@@ -8,6 +8,7 @@ interface LegacyCommand {
 interface LegacyPrompt {
   promptNode: HTMLElement;
   commands: LegacyCommand[];
+  showCommands(commands: LegacyCommand[], clear: boolean): void;
 }
 
 export class LegacyCommands {
@@ -18,7 +19,8 @@ export class LegacyCommands {
       ?.prompt?.instance;
     if (
       prompt?.promptNode?.ownerDocument !== win.document ||
-      !Array.isArray(prompt.commands)
+      !Array.isArray(prompt.commands) ||
+      typeof prompt.showCommands !== "function"
     )
       return false;
     let command = this.registrations.get(prompt);
@@ -34,7 +36,11 @@ export class LegacyCommands {
       };
       this.registrations.set(prompt, command);
     }
-    if (!prompt.commands.includes(command)) prompt.commands.push(command);
+    if (!prompt.commands.includes(command)) {
+      prompt.commands.push(command);
+      if (prompt.promptNode.querySelectorAll(".commands-container").length <= 1)
+        prompt.showCommands(prompt.commands, true);
+    }
     return true;
   }
 

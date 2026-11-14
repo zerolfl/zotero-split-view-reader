@@ -118,28 +118,82 @@ test("selection returns to commands and window unload settles external close", (
   assert.equal(closes, 1);
 });
 
-test("legacy palette shares the command without method hooks or duplicate shortcuts", () => {
+function legacyPrompt(win, containers = 0) {
+  const prompt = {
+    promptNode: {
+      ownerDocument: win.document,
+      style: {},
+      querySelectorAll: () => Array(containers),
+    },
+    commands: [{ id: "other" }],
+    rendered: [],
+    showCommands(commands, clear) {
+      assert.equal(clear, true);
+      this.rendered = [...commands];
+      containers = 1;
+    },
+    exit() {},
+  };
+  return prompt;
+}
+
+test("legacy palette renders a late command without method hooks or duplicate shortcuts", () => {
   const { commandPalette, views, win, Zotero, shortcut } = runtime();
   let runs = 0;
   commandPalette.register(win, async () => {
     runs++;
   });
-  const other = { id: "other" };
-  const prompt = {
-    promptNode: { ownerDocument: win.document, style: {} },
-    commands: [other],
-    exit() {},
-  };
+  const prompt = legacyPrompt(win);
+  const other = prompt.commands[0];
   const originalExit = prompt.exit;
+  const originalShow = prompt.showCommands;
   Zotero._toolkitGlobal = { prompt: { instance: prompt } };
   assert.equal(shortcut().defaultPrevented, false);
   assert.ok(!views[0].isOpen);
   shortcut();
   assert.equal(prompt.commands.length, 2);
+  assert.deepEqual(prompt.rendered, prompt.commands);
   prompt.commands[1].callback();
   assert.equal(runs, 1);
   assert.equal(prompt.promptNode.style.display, "none");
   commandPalette.unregister();
   assert.deepEqual(prompt.commands, [other]);
   assert.equal(prompt.exit, originalExit);
+  assert.equal(prompt.showCommands, originalShow);
+});
+
+test("a shared palette created later registers before Ctrl+P without consuming it", () => {
+  const { commandPalette, views, win, Zotero, shortcut } = runtime();
+  commandPalette.register(win, async () => {});
+  const prompt = legacyPrompt(win);
+  Zotero._toolkitGlobal = { prompt: { instance: prompt } };
+  const event = shortcut(win, {}, { ctrlKey: true, shiftKey: false });
+  assert.equal(event.defaultPrevented, false);
+  assert.ok(!views[0].isOpen);
+  assert.equal(prompt.rendered[1].id, "split-view-reader");
+  commandPalette.unregister();
+});
+
+test("registration refreshes an existing root list but preserves nested workflows", () => {
+  for (const containers of [1, 2]) {
+    const { commandPalette, win, Zotero } = runtime();
+    const prompt = legacyPrompt(win, containers);
+    Zotero._toolkitGlobal = { prompt: { instance: prompt } };
+    commandPalette.register(win, async () => {});
+    assert.equal(prompt.commands.length, 2);
+    assert.equal(prompt.rendered.length, containers === 1 ? 2 : 0);
+    commandPalette.unregister();
+  }
+});
+
+test("an incomplete shared palette keeps the working standalone shortcut", () => {
+  const { commandPalette, views, win, Zotero, shortcut } = runtime();
+  const prompt = legacyPrompt(win);
+  delete prompt.showCommands;
+  Zotero._toolkitGlobal = { prompt: { instance: prompt } };
+  commandPalette.register(win, async () => {});
+  assert.equal(shortcut().defaultPrevented, true);
+  assert.equal(views[0].isOpen, true);
+  assert.equal(views[0].rows.length, 1);
+  commandPalette.unregister();
 });
