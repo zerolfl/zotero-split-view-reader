@@ -102,7 +102,7 @@ export class SplitViewFactory {
       readerView.getCurrentViewStateFromBrowser(browser),
     saveViewState: (itemID, viewState) =>
       attachmentState.saveViewStateToDisk(itemID, viewState),
-    cleanupResources: (tabID) => this.cleanupTabResources(tabID),
+    cleanupResources: (tabID) => this.tabCleanup.cleanup(tabID),
     registerNotifier: (callback) =>
       Zotero.Notifier.registerObserver(callback, ["tab"], "splitView", 20),
     unregisterNotifier: (id) => Zotero.Notifier.unregisterObserver(id),
@@ -147,7 +147,7 @@ export class SplitViewFactory {
       readerView.getCurrentViewStateFromBrowser(browser),
     saveViewState: (itemID, viewState) =>
       attachmentState.saveViewStateToDisk(itemID, viewState),
-    cleanup: (tabID) => this.cleanupTabResources(tabID),
+    cleanup: (tabID) => this.tabCleanup.cleanup(tabID),
     prepareSingleReaderClose: (tabID, itemID) =>
       this.session.prepareClose(tabID, itemID),
     showClosed: () => this.notifications.showClosed(),
@@ -209,13 +209,13 @@ export class SplitViewFactory {
     getIconURI: (name) => this.menuPresentation.getIconURI(name),
     setMenuItemIcon: (item, uri) =>
       this.menuPresentation.setMenuItemIcon(item, uri),
-    swapPDFs: (id) => this.swapPDFs(id),
-    separateViews: (id, side) => void this.separateViews(id, side),
+    swapPDFs: (id) => this.pdfSwap.swap(id),
+    separateViews: (id, side) => void this.lifecycle.separate(id, side),
     handleSplitView: (reader) => void this.readerEntryFlow.open(reader),
     revertToSingleReader: (id, side) =>
-      void this.revertToSingleReader(id, side),
+      void this.lifecycle.revertToSingleReader(id, side),
     setPrimarySide: (id, side) => this.primaryView.setSide(id, side),
-    selectAndLoadPDF: (id, side) => this.selectAndLoadPDF(id, side),
+    selectAndLoadPDF: (id, side) => this.pdfReplacement.selectAndLoad(id, side),
     syncPositionAndScale: (id, side) =>
       this.sync.syncPositionAndScale(id, side),
     activateSide: (id, side, win) =>
@@ -321,7 +321,8 @@ export class SplitViewFactory {
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
     hasActiveSplitState: (tabID) => this.stateStore.hasActive(tabID),
     getCloseLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
-    closeSide: (tabID, side) => void this.revertToSingleReader(tabID, side),
+    closeSide: (tabID, side) =>
+      void this.lifecycle.revertToSingleReader(tabID, side),
     installButton: (browser, options) => installCloseButton(browser, options),
   });
   private static readerInitialization = new SplitReaderInitialization(
@@ -333,7 +334,7 @@ export class SplitViewFactory {
       handleReadAloudStatus: (tabID, browser, status) =>
         this.readAloudCoordinator.handleStatus(tabID, browser, status),
       openContextMenu: (browser, popupset, params) =>
-        this.openContextMenu(browser, popupset, params),
+        this.readerPopupMenu.open(browser, popupset, params),
       toggleSidebar: (tabID, browser, open) =>
         this.sync.handleSidebarToggle(tabID, browser, open),
       shouldSyncLastReadAloudPosition: (state, browser, viewState) =>
@@ -387,7 +388,8 @@ export class SplitViewFactory {
       this.tabNotifier.ensureRegistered(win);
       this.splitContextPane.setupForCreatedTab(tabID, win);
     },
-    initializeReader: (...args) => this.initializeReader(...args),
+    initializeReader: (...args) =>
+      this.readerInitialization.initialize(...args),
     showLoaded: (isSamePDF) => this.notifications.showCreated(isSamePDF),
     updateContextPane: (tabID, win, itemID) =>
       splitContextPane.updateItem(tabID, win, itemID),
@@ -397,7 +399,7 @@ export class SplitViewFactory {
     scheduleDelayedSetup: (...args) => this.delayedSetup.schedule(...args),
     writeSession: (state) => this.session.write(state),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
-    cleanup: (tabID) => this.cleanupTab(tabID),
+    cleanup: (tabID) => this.tabCleanup.cleanupAndSave(tabID),
   });
   private static conversion = new SplitViewConversionService({
     getMainWindow: () => Zotero.getMainWindow(),
@@ -429,11 +431,13 @@ export class SplitViewFactory {
       this.menuPresentation.getSetPrimaryMenuLabel(state),
     getPrimaryMenuConfig: (state, side) =>
       this.primaryView.getMenuConfig(state, side),
-    swapPDFs: (tabID) => this.swapPDFs(tabID),
-    separateViews: (tabID, side) => void this.separateViews(tabID, side),
-    closeSide: (tabID, side) => void this.revertToSingleReader(tabID, side),
+    swapPDFs: (tabID) => this.pdfSwap.swap(tabID),
+    separateViews: (tabID, side) => void this.lifecycle.separate(tabID, side),
+    closeSide: (tabID, side) =>
+      void this.lifecycle.revertToSingleReader(tabID, side),
     setPrimarySide: (tabID, side) => this.primaryView.setSide(tabID, side),
-    selectAndLoadPDF: (tabID, side) => this.selectAndLoadPDF(tabID, side),
+    selectAndLoadPDF: (tabID, side) =>
+      this.pdfReplacement.selectAndLoad(tabID, side),
     syncPositionAndScale: (tabID, side) =>
       this.sync.syncPositionAndScale(tabID, side),
     activateSide: (tabID, side, win) =>
@@ -449,7 +453,8 @@ export class SplitViewFactory {
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
     getItem: (itemID) => itemApi.get(itemID) || undefined,
     getMainWindow: () => Zotero.getMainWindow(),
-    initializeReader: (...args) => this.initializeReader(...args),
+    initializeReader: (...args) =>
+      this.readerInitialization.initialize(...args),
     setupFocusListeners: (...args) =>
       this.interactions.setupFocusListeners(...args),
     setupCtrlKeyListener: (...args) =>
@@ -475,7 +480,8 @@ export class SplitViewFactory {
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
     getMainWindow: () => Zotero.getMainWindow(),
-    initializeReader: (...args) => this.initializeReader(...args),
+    initializeReader: (...args) =>
+      this.readerInitialization.initialize(...args),
     setupBrowserFocusListeners: (...args) =>
       this.interactions.setupBrowserFocusListeners(...args),
     setupCtrlKeyListener: (...args) =>
@@ -539,7 +545,7 @@ export class SplitViewFactory {
   });
   private static readerEntryFlow = new SplitReaderEntryFlow({
     getState: (tabID) => this.stateStore.get(tabID) || null,
-    cleanup: (tabID) => this.cleanupTab(tabID),
+    cleanup: (tabID) => this.tabCleanup.cleanupAndSave(tabID),
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
     getItem: (itemID) => itemApi.get(itemID) || null,
@@ -562,7 +568,7 @@ export class SplitViewFactory {
     getStates: () => this.stateStore.values(),
     saveAll: (states) => this.tabNotifier.saveAll(states),
     getTabIDs: () => this.stateStore.keys(),
-    cleanupTabResources: (tabID) => this.cleanupTabResources(tabID),
+    cleanupTabResources: (tabID) => this.tabCleanup.cleanup(tabID),
     clearStates: () => this.stateStore.clear(),
     unregisterSession: () => this.session.unregister(),
     unregisterTabNotifier: () => this.tabNotifier.unregister(),
@@ -648,110 +654,4 @@ export class SplitViewFactory {
   static unregisterAll() {
     this.registration.unregisterAll();
   }
-
-  /**
-   * Restore split view from saved session data
-   */
-  /**
-   * Select and load a new PDF in the secondary (non-primary) window
-   */
-  /**
-   * Select and load a new PDF in the specified side panel.
-   * @param tabID Tab ID
-   * @param targetSide The side where the new PDF will be loaded (based on where the user right-clicked)
-   */
-  private static async selectAndLoadPDF(
-    tabID: string,
-    targetSide: "left" | "right",
-  ) {
-    await this.pdfReplacement.selectAndLoad(tabID, targetSide);
-  }
-
-  /**
-   * Swap the PDFs between left and right panels.
-   * Recreates both browser instances with swapped items and view states.
-   * Primary and active side settings remain attached to their panes.
-   */
-  private static async swapPDFs(tabID: string) {
-    await this.pdfSwap.swap(tabID);
-  }
-
-  /**
-   * Initialize a reader in a browser element
-   * @param viewState - Optional view state to restore position
-   * @param isRight - Whether this is the right browser (shows context pane toggle)
-   */
-  private static async initializeReader(
-    tabID: string,
-    browser: XULBrowserElement,
-    item: Zotero.Item,
-    popupset: XULElement,
-    viewState?: any,
-    isRight: boolean = false,
-  ): Promise<void> {
-    await this.readerInitialization.initialize(
-      tabID,
-      browser,
-      item,
-      popupset,
-      viewState,
-      isRight,
-    );
-  }
-
-  /**
-   * Open context menu for a reader
-   */
-  private static openContextMenu(
-    browser: XULBrowserElement,
-    popupset: XULElement,
-    params: { x: number; y: number; itemGroups: any[][] },
-  ) {
-    this.readerPopupMenu.open(browser, popupset, params);
-  }
-
-  /**
-   * Revert split view to single reader
-   * Called when user unchecks "Split-View Reader" in context menu
-   * Keeps the focused reader and closes the other one
-   * @param sideToClose Optional. If provided, closes this specific side. If not, keeps active side.
-   */
-  private static async separateViews(
-    tabID: string,
-    clickedSide: "left" | "right",
-  ) {
-    await this.lifecycle.separate(tabID, clickedSide);
-  }
-
-  /**
-   * Revert split view to single reader
-   * Called when user unchecks "Split-View Reader" in context menu
-   * Keeps the focused reader and closes the other one
-   * @param sideToClose Optional. If provided, closes this specific side. If not, keeps active side.
-   */
-  private static async revertToSingleReader(
-    tabID: string,
-    sideToClose?: "left" | "right",
-  ) {
-    await this.lifecycle.revertToSingleReader(tabID, sideToClose);
-  }
-
-  /**
-   * Clean up split view state resources for a specific tab and remove from map.
-   * Core cleanup logic shared by cleanupTab and cleanupTabResources.
-   */
-  private static cleanupTabResources(tabID: string) {
-    this.tabCleanup.cleanup(tabID);
-  }
-
-  /**
-   * Clean up a specific tab's split view (with state save)
-   */
-  private static cleanupTab(tabID: string) {
-    this.tabCleanup.cleanupAndSave(tabID);
-  }
-
-  // NOTE: The old singleton cleanup() method has been replaced by:
-  // - cleanupTab(tabID): saves state + cleans up resources for a specific tab
-  // - cleanupTabResources(tabID): cleans up resources only (no state save)
 }
