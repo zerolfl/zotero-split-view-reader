@@ -25,9 +25,9 @@ const ctx = await Config.loadConfig({
       "test:prebuild": async (context) => {
         const path = resolve(context.dist, "addon/manifest.json");
         const manifest = JSON.parse(await readFile(path, "utf8"));
-        if (manifest.applications.zotero.strict_max_version !== "10.*") {
+        if (manifest.applications.zotero.strict_max_version !== "11.*") {
           throw new Error(
-            "Test build does not declare Zotero 10 compatibility",
+            "Test build does not declare Zotero 11 compatibility",
           );
         }
       },

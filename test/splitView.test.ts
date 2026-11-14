@@ -698,24 +698,33 @@ describe("split reader integration", function () {
       const original = state.splitRatio;
       const tabs = win.Zotero_Tabs as any;
       const savedRatio = () => tabs._getTab(state.tabID).tab.data.splitRatio;
+      const mouse = (
+        target: EventTarget,
+        type: string,
+        x: number,
+        y: number,
+        buttons: number,
+      ) =>
+        target.dispatchEvent(
+          new win.MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            button: 0,
+            buttons,
+          }),
+        );
       const drag = (ratio: number) => {
         const rect = resizer.getBoundingClientRect();
-        win.windowUtils.sendMouseEvent(
-          "mousedown",
-          rect.x,
-          rect.y + rect.height / 2,
-          0,
-          1,
-          0,
-        );
+        mouse(resizer, "mousedown", rect.x, rect.y + rect.height / 2, 1);
         assert.ok(state.dragOverlay);
-        win.windowUtils.sendMouseEvent(
+        mouse(
+          state.dragOverlay,
           "mousemove",
           box.x + box.width * ratio,
           rect.y + rect.height / 2,
-          0,
-          0,
-          0,
+          1,
         );
       };
       drag(0.65);
@@ -735,12 +744,11 @@ describe("split reader integration", function () {
       drag(0.6);
       await waitFor(() => state.splitRatio > original);
       const changed = state.splitRatio;
-      win.windowUtils.sendMouseEvent(
+      mouse(
+        state.dragOverlay,
         "mouseup",
         box.x + box.width * changed,
         box.y + box.height / 2,
-        0,
-        1,
         0,
       );
       await waitFor(() => !state.dragOverlay);
