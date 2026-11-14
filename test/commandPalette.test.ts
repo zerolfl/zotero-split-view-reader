@@ -51,13 +51,25 @@ describe("command palette shortcut integration", function () {
     assert.isFalse(root.hidden);
     const options = root.querySelectorAll('[role="option"]');
     assert.lengthOf(options, 2);
-    const option = options[0] as HTMLElement;
+    const readerOption = options[0] as HTMLElement;
+    const splitOption = options[1] as HTMLElement;
     assert.include(
-      option.textContent,
+      readerOption.textContent,
+      text("splitview-command-open-reader"),
+    );
+    assert.include(
+      splitOption.textContent,
       text("splitview-command-open-split-view"),
     );
-    assert.isAbove(option.getBoundingClientRect().height, 0);
-    assert.notEqual(win.getComputedStyle(option).display, "none");
+    assert.isAbove(readerOption.getBoundingClientRect().height, 0);
+    assert.notEqual(win.getComputedStyle(readerOption).display, "none");
+    input.dispatchEvent(
+      new win.KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     input.dispatchEvent(
       new win.KeyboardEvent("keydown", {
         key: "Enter",
@@ -124,9 +136,13 @@ describe("command palette shortcut integration", function () {
       assert.equal(rows[0].textContent, "Other command");
       assert.include(
         rows[1].textContent,
+        text("splitview-command-open-reader"),
+      );
+      assert.include(
+        rows[2].textContent,
         text("splitview-command-open-split-view"),
       );
-      (rows[1] as HTMLElement).click();
+      (rows[2] as HTMLElement).click();
       assert.equal(prompt.promptNode.style.display, "none");
       assert.isFalse(root.hidden);
       assert.equal(input.placeholder, text("splitview-select-first-pdf"));

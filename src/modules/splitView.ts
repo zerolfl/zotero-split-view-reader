@@ -650,18 +650,18 @@ export class SplitViewFactory {
     registerCommandPalette: (win) =>
       commandPalette.register(win, [
         {
+          id: "open-attachment-in-reader",
+          name: getString("splitview-command-open-reader"),
+          description: getString("splitview-command-open-reader-description"),
+          run: () => this.attachmentReaderFlow.open(),
+        },
+        {
           id: "split-view-reader",
           name: getString("splitview-command-open-split-view"),
           description: getString(
             "splitview-command-open-split-view-description",
           ),
           run: () => this.commandEntry.execute(win),
-        },
-        {
-          id: "open-attachment-in-reader",
-          name: getString("splitview-command-open-reader"),
-          description: getString("splitview-command-open-reader-description"),
-          run: () => this.attachmentReaderFlow.open(),
         },
       ]),
     unregisterAll: () => this.shutdown.unregisterAll(),

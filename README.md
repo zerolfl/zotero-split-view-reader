@@ -31,7 +31,7 @@
 
 ### Quick Start with Command Palette
 
-Press `Shift + P` to open Zotero's command palette, then choose **Open in Split View** to start split-view mode or **Open in Reader** to open a single attachment in Zotero Reader.
+Press `Shift + P` to open Zotero's command palette, then choose **Open in Zotero Reader** to open a single attachment or **Open in Split View** to start split-view mode.
 
 <p align="center">
   <img src="doc/command-example.png" width="650" alt="Command Palette" />

@@ -94,16 +94,16 @@ test("command palette routes split and ordinary reader actions separately", () =
   const calls = [];
   commandPalette.register(win, [
     {
+      id: "open-attachment-in-reader",
+      name: "Open in Zotero Reader",
+      description: "Split-View Reader",
+      run: async () => calls.push("reader"),
+    },
+    {
       id: "split-view-reader",
       name: "Open in Split View",
       description: "Split-View Reader",
       run: async () => calls.push("split"),
-    },
-    {
-      id: "open-attachment-in-reader",
-      name: "Open in Reader",
-      description: "Zotero Reader",
-      run: async () => calls.push("reader"),
     },
   ]);
   shortcut();
@@ -111,7 +111,7 @@ test("command palette routes split and ordinary reader actions separately", () =
   views[0].handlers.input("reader");
   assert.deepEqual(
     views[0].rows.map((row) => row.title),
-    ["Open in Reader"],
+    ["Open in Zotero Reader"],
   );
   views[0].rows[0].select();
   assert.deepEqual(calls, ["reader"]);
@@ -170,19 +170,19 @@ test("legacy palette renders a late command without method hooks or duplicate sh
   let runs = 0;
   commandPalette.register(win, [
     {
+      id: "open-attachment-in-reader",
+      name: "Open in Zotero Reader",
+      description: "Split-View Reader",
+      run: async () => {
+        runs += 10;
+      },
+    },
+    {
       id: "split-view-reader",
       name: "Open in Split View",
       description: "Split-View Reader",
       run: async () => {
         runs++;
-      },
-    },
-    {
-      id: "open-attachment-in-reader",
-      name: "Open in Reader",
-      description: "Zotero Reader",
-      run: async () => {
-        runs += 10;
       },
     },
   ]);
@@ -197,7 +197,7 @@ test("legacy palette renders a late command without method hooks or duplicate sh
   assert.equal(prompt.commands.length, 3);
   assert.deepEqual(prompt.rendered, prompt.commands);
   prompt.commands[1].callback();
-  assert.equal(runs, 1);
+  assert.equal(runs, 10);
   prompt.commands[2].callback();
   assert.equal(runs, 11);
   assert.equal(prompt.promptNode.style.display, "none");
@@ -226,15 +226,15 @@ test("registration refreshes an existing root list but preserves nested workflow
     Zotero._toolkitGlobal = { prompt: { instance: prompt } };
     commandPalette.register(win, [
       {
-        id: "split-view-reader",
-        name: "Open in Split View",
+        id: "open-attachment-in-reader",
+        name: "Open in Zotero Reader",
         description: "Split-View Reader",
         run: async () => {},
       },
       {
-        id: "open-attachment-in-reader",
-        name: "Open in Reader",
-        description: "Zotero Reader",
+        id: "split-view-reader",
+        name: "Open in Split View",
+        description: "Split-View Reader",
         run: async () => {},
       },
     ]);
