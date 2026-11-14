@@ -12,17 +12,16 @@ interface TabContextMenuHandlers {
 }
 
 export class SplitTabContextMenu {
-  private context: { tabID: string; openedAt: number; popup?: Element } | null =
-    null;
-  private handlers: TabContextMenuHandlers | null = null;
-  private document: Document | null = null;
+  private windows = new Map<Window, () => void>();
 
   constructor(private readonly callbacks: TabContextMenuCallbacks) {}
 
   register(win: Window): void {
-    if (this.handlers) return;
+    if (this.windows.has(win)) return;
 
     const document = win.document;
+    let context: { tabID: string; openedAt: number; popup?: Element } | null =
+      null;
     const showInLibraryLabel = Zotero.getString("general.showInLibrary");
     const moveTabLabel = Zotero.getString("tabs.move");
     const contextmenu = ((event: Event) => {
@@ -31,7 +30,7 @@ export class SplitTabContextMenu {
         "#tab-bar-container .tab[data-id]",
       ) as Element | null;
       const tabID = tab?.getAttribute("data-id");
-      this.context = tabID ? { tabID, openedAt: Date.now() } : null;
+      context = tabID ? { tabID, openedAt: Date.now() } : null;
     }) as EventListener;
 
     const popupshowing = ((event: Event) => {
@@ -39,11 +38,11 @@ export class SplitTabContextMenu {
       if (!popup || popup.localName !== "menupopup") return;
 
       try {
-        const context = this.context;
-        if (!context || Date.now() - context.openedAt >= 5000) return;
-        if (!this.callbacks.isActiveSplitView(context.tabID)) return;
+        const current = context;
+        if (!current || Date.now() - current.openedAt >= 5000) return;
+        if (!this.callbacks.isActiveSplitView(current.tabID)) return;
 
-        const tab = tabsForWindow(win).lookup(context.tabID)?.tab;
+        const tab = tabsForWindow(win).lookup(current.tabID)?.tab;
         if (!tab?.data?.isSplitView) return;
 
         const popupset = document.querySelector("popupset");
@@ -62,21 +61,21 @@ export class SplitTabContextMenu {
         );
         if (!showInLibraryItem || !hasMoveTabMenu) return;
 
-        context.popup = popup;
+        current.popup = popup;
         const replacement = showInLibraryItem.cloneNode(true) as Element;
         replacement.addEventListener("command", (commandEvent: Event) => {
           commandEvent.preventDefault();
           commandEvent.stopPropagation();
           commandEvent.stopImmediatePropagation();
 
-          const currentTab = tabsForWindow(win).lookup(context.tabID)?.tab;
+          const currentTab = tabsForWindow(win).lookup(current.tabID)?.tab;
           if (
-            !this.callbacks.isActiveSplitView(context.tabID) ||
+            !this.callbacks.isActiveSplitView(current.tabID) ||
             !currentTab?.data?.isSplitView
           ) {
             return;
           }
-          this.callbacks.showInLibrary(context.tabID, win);
+          this.callbacks.showInLibrary(current.tabID, win);
         });
         showInLibraryItem.replaceWith(replacement);
       } catch {
@@ -86,43 +85,36 @@ export class SplitTabContextMenu {
 
     const popuphidden = ((event: Event) => {
       const target = event.target as Element | null;
-      if (target?.localName === "menupopup" && this.context?.popup === target) {
-        this.context = null;
+      if (target?.localName === "menupopup" && context?.popup === target) {
+        context = null;
       }
     }) as EventListener;
 
     document.addEventListener("contextmenu", contextmenu, true);
     document.addEventListener("popupshowing", popupshowing, true);
     document.addEventListener("popuphidden", popuphidden, true);
-    this.document = document;
-    this.handlers = { contextmenu, popupshowing, popuphidden };
+    this.windows.set(win, () => {
+      context = null;
+      const handlers: TabContextMenuHandlers = {
+        contextmenu,
+        popupshowing,
+        popuphidden,
+      };
+      for (const [type, listener] of Object.entries(handlers)) {
+        try {
+          document.removeEventListener(type, listener, true);
+        } catch (error) {
+          Zotero.debug(`Split view: tab context menu cleanup failed: ${error}`);
+        }
+      }
+    });
   }
 
-  unregister(): void {
-    try {
-      if (this.document && this.handlers) {
-        this.document.removeEventListener(
-          "contextmenu",
-          this.handlers.contextmenu,
-          true,
-        );
-        this.document.removeEventListener(
-          "popupshowing",
-          this.handlers.popupshowing,
-          true,
-        );
-        this.document.removeEventListener(
-          "popuphidden",
-          this.handlers.popuphidden,
-          true,
-        );
-      }
-    } catch (error) {
-      Zotero.debug(`Split view: tab context menu cleanup failed: ${error}`);
-    } finally {
-      this.context = null;
-      this.handlers = null;
-      this.document = null;
+  unregister(win?: Window): void {
+    for (const [owner, dispose] of this.windows) {
+      if (win && owner !== win) continue;
+      dispose();
+      this.windows.delete(owner);
     }
   }
 }

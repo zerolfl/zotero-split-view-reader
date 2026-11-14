@@ -2,6 +2,7 @@ import type { SplitTabState } from "./types";
 
 export interface SplitTabNotifierDependencies {
   getState(tabID: string): SplitTabState | null;
+  getWindowForTab(tabID: string): Window | null;
   getActiveParentItemID(state: SplitTabState): number;
   showForSplitView(win: Window): void;
   updateContextPane(tabID: string, win: Window, itemID: number): void;
@@ -25,7 +26,7 @@ export class SplitTabNotifier {
 
   constructor(private readonly deps: SplitTabNotifierDependencies) {}
 
-  ensureRegistered(win: Window): void {
+  ensureRegistered(): void {
     if (this.id) return;
     this.id = this.deps.registerNotifier({
       notify: (action, type, ids) => {
@@ -34,6 +35,8 @@ export class SplitTabNotifier {
         const state = this.deps.getState(tabID);
 
         if (action === "select") {
+          const win = state?.ownerWindow || this.deps.getWindowForTab(tabID);
+          if (!win) return;
           if (state && !state.isCleaningUp) {
             win.document.documentElement?.classList.add("split-view-active");
             this.deps.showForSplitView(win);

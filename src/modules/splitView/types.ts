@@ -14,6 +14,7 @@ export interface ToolbarCloseObserver {
 
 export interface SplitTabState {
   tabID: string;
+  ownerWindow: Window;
   container: XUL.Box;
   leftBrowser: XULBrowserElement;
   rightBrowser: XULBrowserElement;

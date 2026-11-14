@@ -13,6 +13,7 @@ function setup({
   let unregisterError = false;
   const notifier = new SplitTabNotifier({
     getState: (tabID) => states.get(tabID) || null,
+    getWindowForTab: () => win,
     getActiveParentItemID: (state) => state.activeParentItemID,
     showForSplitView: (win) => events.push(["show", win]),
     updateContextPane: (...args) => events.push(["context", ...args]),
@@ -87,6 +88,23 @@ test("registers once and updates split tab chrome on selection", () => {
     ),
   );
   assert.ok(fixture.events.some(([name]) => name === "class-remove"));
+});
+
+test("selection updates the owning window instead of the first registered window", () => {
+  const current = state();
+  const fixture = setup({ states: new Map([["split", current]]) });
+  let added = 0;
+  const owner = {
+    document: { documentElement: { classList: { add: () => added++ } } },
+  };
+  current.ownerWindow = owner;
+  fixture.notifier.ensureRegistered(fixture.win);
+  fixture.callback().notify("select", "tab", ["split"], {});
+  assert.equal(added, 1);
+  assert.ok(!fixture.events.some(([name]) => name === "class-add"));
+  assert.ok(
+    fixture.events.some(([name, win]) => name === "show" && win === owner),
+  );
 });
 
 test("saves live positions and releases resources when a split tab closes", async () => {

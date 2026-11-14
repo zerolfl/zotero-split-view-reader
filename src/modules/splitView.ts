@@ -93,6 +93,10 @@ export class SplitViewFactory {
   });
   private static tabNotifier = new SplitTabNotifier({
     getState: (tabID) => this.stateStore.get(tabID) || null,
+    getWindowForTab: (tabID) =>
+      Zotero.getMainWindows().find(
+        (win) => !!win.document.getElementById(tabID),
+      ) || null,
     getActiveParentItemID: (state) =>
       this.stateStore.getActiveParentItemID(state),
     showForSplitView: (win) => splitContextPane.showForSplitView(win),
@@ -117,7 +121,11 @@ export class SplitViewFactory {
     pauseReader: (browser) =>
       this.readAloudCoordinator.pauseBrowser(browser, true),
     setAudioStatus: (tabID) =>
-      setTabAudioStatus(tabID, { active: false, paused: false }),
+      setTabAudioStatus(
+        tabID,
+        { active: false, paused: false },
+        this.stateStore.get(tabID)?.ownerWindow,
+      ),
     unloadBrowser: (browser) => readerRuntime.unloadBrowser(browser),
     stopSyncPolling: (tabID) => this.sync.stopSyncPolling(tabID),
     getMainWindow: () => Zotero.getMainWindow(),
@@ -162,7 +170,8 @@ export class SplitViewFactory {
     states: () => this.stateStore.values(),
     getState: (id) => this.stateStore.get(id),
     getReader: (browser) => readerRuntime.getInternalReaderFromBrowser(browser),
-    setAudioStatus: (id, status) => setTabAudioStatus(id, status),
+    setAudioStatus: (id, status) =>
+      setTabAudioStatus(id, status, this.stateStore.get(id)?.ownerWindow),
     pauseOtherReaders: pauseNativeReaders,
   });
   private static readerBrowser = new SplitReaderBrowserAdapter({
@@ -385,7 +394,7 @@ export class SplitViewFactory {
         shell.rightBrowser,
         state.splitRatio,
       );
-      this.tabNotifier.ensureRegistered(win);
+      this.tabNotifier.ensureRegistered();
       this.splitContextPane.setupForCreatedTab(tabID, win);
     },
     initializeReader: (...args) =>
@@ -589,11 +598,11 @@ export class SplitViewFactory {
       this.splitScrollbar.unregisterObservers(),
     unregisterTabTitles: () => this.tabTitles.unregister(),
     unregisterReadAloud: () => this.readAloud.unregister(),
-    unregisterTabLookup: () => {
-      this.tabHooks.unregister();
-      this.tabContextMenu.unregister();
+    unregisterTabLookup: (win) => {
+      this.tabHooks.unregister(win);
+      this.tabContextMenu.unregister(win);
     },
-    unregisterCommandPalette: () => commandPalette.unregister(),
+    unregisterCommandPalette: (win) => commandPalette.unregister(win),
     debug: (message) => Zotero.debug(message),
   });
   private static readAloud = new SplitReadAloudService({
@@ -666,5 +675,9 @@ export class SplitViewFactory {
    */
   static unregisterAll() {
     this.registration.unregisterAll();
+  }
+
+  static unregisterWindow(win: Window) {
+    this.shutdown.unregisterWindow(win);
   }
 }

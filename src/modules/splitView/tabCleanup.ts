@@ -68,7 +68,7 @@ export class SplitTabCleanup {
 
     let win: Window | null = null;
     try {
-      win = this.deps.getMainWindow();
+      win = state.ownerWindow || this.deps.getMainWindow();
     } catch (error) {
       this.deps.debug(
         `Split view: cleanup ${tabID} - getMainWindow failed: ${error}`,

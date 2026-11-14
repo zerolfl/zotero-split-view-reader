@@ -70,6 +70,7 @@ export class SplitViewCreationService {
     const rightParentItemID = rightItem.parentItemID || rightItem.id;
     const state = createSplitTabState({
       tabID,
+      ownerWindow: win,
       container: shell.container as unknown as XUL.Box,
       leftBrowser: shell.leftBrowser,
       rightBrowser: shell.rightBrowser,

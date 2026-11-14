@@ -148,3 +148,17 @@ test("tab menu listeners unregister idempotently and clear popup context", () =>
   harness.adapter.unregister();
   assert.equal(harness.listeners.size, 0);
 });
+
+test("unregistering one window leaves the other window's menu listeners", () => {
+  const first = setup();
+  const second = setup();
+  first.adapter.register(first.win);
+  first.adapter.register(second.win);
+  assert.equal(first.listeners.size, 3);
+  assert.equal(second.listeners.size, 3);
+  first.adapter.unregister(first.win);
+  assert.equal(first.listeners.size, 0);
+  assert.equal(second.listeners.size, 3);
+  first.adapter.unregister();
+  assert.equal(second.listeners.size, 0);
+});

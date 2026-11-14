@@ -63,3 +63,48 @@ test("saves and cleans split tabs before unregistering shared services", () => {
   ]);
   assert.equal(states.size, 0);
 });
+
+test("window unload saves and cleans only its tabs and retains shared services", () => {
+  const first = {};
+  const second = {};
+  const states = new Map([
+    ["first", { tabID: "first", ownerWindow: first }],
+    ["second", { tabID: "second", ownerWindow: second }],
+    ["third", { tabID: "third", ownerWindow: first }],
+  ]);
+  const events = [];
+  const shared = () => assert.fail("shared services must remain registered");
+  const shutdown = new SplitViewShutdown({
+    getStates: () => states.values(),
+    saveAll: (values) =>
+      events.push(["save", [...values].map((state) => state.tabID)]),
+    cleanupTabResources: (id) => {
+      events.push(["cleanup", id]);
+      states.delete(id);
+    },
+    unregisterTabLookup: (win) => events.push(["hooks", win]),
+    unregisterCommandPalette: (win) => events.push(["palette", win]),
+    disposePDFSelector: shared,
+    unregisterReaderContextMenu: shared,
+    getTabIDs: shared,
+    clearStates: shared,
+    unregisterSession: shared,
+    unregisterTabNotifier: shared,
+    unregisterScrollbarObservers: shared,
+    unregisterTabTitles: shared,
+    unregisterReadAloud: shared,
+    debug: shared,
+  });
+  shutdown.unregisterWindow(first);
+  assert.deepEqual(events, [
+    ["save", ["first", "third"]],
+    ["cleanup", "first"],
+    ["cleanup", "third"],
+    ["hooks", first],
+    ["palette", first],
+  ]);
+  assert.equal(states.size, 1);
+  assert.equal(states.get("second").ownerWindow, second);
+  shutdown.unregisterWindow(second);
+  assert.equal(states.size, 0);
+});

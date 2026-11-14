@@ -76,6 +76,18 @@ describe("split reader integration", function () {
     factory.primaryView.setSide(tabID, side);
   }
 
+  it("keeps the active split readers when another window unloads", async function () {
+    const state = await open(false);
+    const tabs = Zotero.getMainWindow().Zotero_Tabs;
+    const hook = tabs.getTabIDByItemID;
+    SplitViewFactory.unregisterWindow({} as Window);
+    assert.strictEqual(factory.stateStore.get(state.tabID), state);
+    assert.strictEqual(tabs.getTabIDByItemID, hook);
+    assert.ok(readerRuntime.getInternalReaderFromBrowser(state.leftBrowser));
+    assert.ok(readerRuntime.getInternalReaderFromBrowser(state.rightBrowser));
+    assert.isFalse(state.isCleaningUp);
+  });
+
   describe("conversion recovery", function () {
     for (const failure of ["shell", "left", "right"]) {
       it(`restores the original reader after ${failure} initialization fails`, async function () {

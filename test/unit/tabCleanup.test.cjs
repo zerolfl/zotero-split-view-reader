@@ -107,6 +107,24 @@ test("keeps shared chrome and notifier while another split tab remains", () => {
   assert.equal(fixture.states.has("other"), true);
 });
 
+test("cleanup releases timers and chrome in the owning window", () => {
+  const fixture = setup({ extraTab: true });
+  const released = [];
+  fixture.state.ownerWindow = {
+    clearTimeout: (id) => released.push(id),
+    document: {
+      documentElement: { classList: { remove: (name) => released.push(name) } },
+    },
+  };
+  fixture.cleanup.cleanup("split");
+  assert.deepEqual(released, ["split-view-active", 1, 2, 3, 4]);
+  assert.ok(
+    !fixture.events.some(
+      ([name]) => name === "timer" || name === "class-remove",
+    ),
+  );
+});
+
 test("continues cleanup when individual listener or timer releases fail", () => {
   const fixture = setup({ failTimers: true });
   fixture.state.eventListeners.push({

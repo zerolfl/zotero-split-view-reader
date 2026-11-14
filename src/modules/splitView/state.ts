@@ -2,6 +2,7 @@ import type { SplitSide, SplitTabState, TrackedEventListener } from "./types";
 
 export interface SplitTabStateOptions {
   tabID: string;
+  ownerWindow: Window;
   container: XUL.Box;
   leftBrowser: XULBrowserElement;
   rightBrowser: XULBrowserElement;

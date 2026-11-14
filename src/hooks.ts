@@ -39,14 +39,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
-  // Clean up split-view resources when the main window is unloaded.
-  // This prevents keeping references to DOM nodes and windows that
-  // become "dead objects" after Zotero is closed and reopened.
-  SplitViewFactory.unregisterAll();
-
-  // Cleanup ztoolkit and any open dialog windows.
-  ztoolkit.unregisterAll();
-  addon.data.dialog?.window?.close();
+  SplitViewFactory.unregisterWindow(win);
 }
 
 function onShutdown(): void {
