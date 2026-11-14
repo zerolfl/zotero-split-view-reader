@@ -102,8 +102,8 @@ export class PaletteView {
     );
     this.root.style.setProperty("--split-view-palette-panel-radius", scaled(8));
     this.root.style.setProperty(
-      "--split-view-palette-input-padding",
-      scaled(10),
+      "--split-view-palette-input-height",
+      scaled(34),
     );
     this.root.style.setProperty("--split-view-palette-input-margin", scaled(8));
     this.root.style.setProperty("--split-view-palette-input-radius", scaled(4));

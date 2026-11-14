@@ -79,11 +79,15 @@ describe("palette view", function () {
     );
     assert.equal(
       root.style.getPropertyValue("--split-view-palette-panel-width"),
-      "782px",
+      "1006px",
     );
     assert.equal(
       root.style.getPropertyValue("--split-view-palette-row-padding"),
-      "12px",
+      "16px",
+    );
+    assert.equal(
+      root.style.getPropertyValue("--split-view-palette-input-height"),
+      "53px",
     );
   });
 
