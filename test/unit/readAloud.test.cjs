@@ -184,12 +184,80 @@ test("audio caching uses the native service Response and opens its cache once", 
   assert.equal(stored.length, 1);
   assert.equal(
     stored[0].url,
-    "https://read-aloud.zotero.invalid/audio?voice=voice&text=text",
+    "https://read-aloud.zotero.invalid/audio?voice=voice&text=text&cacheVersion=undefined&timestamps=1",
   );
   assert.equal(await stored[0].response.text(), "audio");
   await remote.getAudio({ text: "another" }, { id: "voice" });
   assert.equal(opened, 1);
   assert.equal(stored.length, 2);
+});
+
+function cachedRuntime() {
+  const fixture = runtime();
+  const entries = new Map();
+  fixture.mainWindow.caches.open = async () => ({
+    match: async (url) => entries.get(url)?.clone(),
+    put: async (url, response) => entries.set(url, response),
+  });
+  return { ...fixture, entries };
+}
+
+test("cached audio retains timestamps and separates voice cache versions", async () => {
+  const { platform, api, targetWindow, entries } = cachedRuntime();
+  const timestamps = [{ time: 0.1, start: 0, end: 4 }];
+  let requests = 0;
+  api.getReadAloudAudio = async () => {
+    requests++;
+    return { audio: new Blob(["audio"]), timestamps };
+  };
+  const remote = platform.getReadAloudRemoteInterface(targetWindow);
+  const segment = { text: "text" };
+  const voice = { id: "voice", cacheVersion: 2 };
+  await remote.getAudio(segment, voice);
+  const cached = await remote.getAudio(segment, voice);
+  assert.equal(requests, 1);
+  assert.equal(await cached.audio.text(), "audio");
+  assert.deepEqual(JSON.parse(JSON.stringify(cached.timestamps)), timestamps);
+  assert.equal(
+    [...entries.values()][0].headers.get("X-Zotero-Timestamps"),
+    JSON.stringify(timestamps),
+  );
+  await remote.getAudio(segment, { ...voice, cacheVersion: 3 });
+  assert.equal(requests, 2);
+  assert.equal(entries.size, 2);
+});
+
+test("invalid timestamp headers still return cached audio and report the error", async () => {
+  const { platform, globals, api, targetWindow, entries } = cachedRuntime();
+  const errors = [];
+  globals.Zotero.logError = (error) => errors.push(error);
+  api.getReadAloudAudio = async () => assert.fail("audio should be cached");
+  entries.set(
+    "https://read-aloud.zotero.invalid/audio?voice=voice&text=text&cacheVersion=2&timestamps=1",
+    new Response("audio", { headers: { "X-Zotero-Timestamps": "invalid" } }),
+  );
+  const remote = platform.getReadAloudRemoteInterface(targetWindow);
+  const result = await remote.getAudio(
+    { text: "text" },
+    { id: "voice", cacheVersion: 2 },
+  );
+  assert.equal(await result.audio.text(), "audio");
+  assert.equal(result.timestamps, undefined);
+  assert.equal(errors.length, 1);
+});
+
+test("noStore audio responses bypass the cache", async () => {
+  const { platform, api, targetWindow, entries } = cachedRuntime();
+  let requests = 0;
+  api.getReadAloudAudio = async () => {
+    requests++;
+    return { audio: new Blob(["audio"]), noStore: true };
+  };
+  const remote = platform.getReadAloudRemoteInterface(targetWindow);
+  await remote.getAudio({ text: "text" }, { id: "voice" });
+  await remote.getAudio({ text: "text" }, { id: "voice" });
+  assert.equal(requests, 2);
+  assert.equal(entries.size, 0);
 });
 
 test("voice write observation filters paths and restores its own wrapper", async () => {

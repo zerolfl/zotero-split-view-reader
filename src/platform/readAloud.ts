@@ -154,24 +154,49 @@ export function getReadAloudRemoteInterface(targetWindow: Window): any {
       childPromise(targetWindow, async () => {
         const cacheURL =
           "https://read-aloud.zotero.invalid/audio?" +
-          new URLSearchParams({ voice: voice.id, text: segment.text });
+          new URLSearchParams({
+            voice: voice.id,
+            text: segment.text,
+            cacheVersion: voice.cacheVersion,
+            timestamps: "1",
+          });
         let cache: Cache | null = null;
         try {
           cache = await audioCache;
           const cached = await cache?.match(cacheURL);
-          if (cached) return { audio: await cached.blob() };
+          if (cached) {
+            let timestamps;
+            const header = cached.headers.get("X-Zotero-Timestamps");
+            if (header) {
+              try {
+                timestamps = JSON.parse(header);
+              } catch (error) {
+                Zotero.logError(error as Error);
+              }
+            }
+            return { audio: await cached.blob(), timestamps };
+          }
         } catch (error) {
           Zotero.logError(error as Error);
         }
         const result = await (
           await client(segment === "sample")
         ).getReadAloudAudio(segment, voice.id);
-        if (result.audio && cache) {
+        if (result.audio && cache && !result.noStore) {
           try {
+            const headers: Record<string, string> = {};
+            if (result.timestamps) {
+              headers["X-Zotero-Timestamps"] = JSON.stringify(
+                result.timestamps,
+              );
+            }
             const NativeResponse = (
               Components.utils.getGlobalForObject(Zotero.Reader) as any
             ).Response;
-            await cache.put(cacheURL, new NativeResponse(result.audio));
+            await cache.put(
+              cacheURL,
+              new NativeResponse(result.audio, { headers }),
+            );
           } catch (error) {
             Zotero.logError(error as Error);
           }

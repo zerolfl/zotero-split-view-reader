@@ -349,7 +349,7 @@ describe("split reader integration", function () {
         }),
         getReadAloudAudio: async (segment: any, voice: string) => {
           requests.push({ text: segment.text, voice });
-          return { audio: audio.slice() };
+          return { audio: audio.slice(), timestamps: [] };
         },
         getReadAloudCreditsRemaining: async () => ({
           standardCreditsRemaining: 100,
@@ -442,7 +442,18 @@ describe("split reader integration", function () {
         const cache = await (Zotero.getMainWindow() as any).caches.open(
           "read-aloud",
         );
-        assert.isAbove((await cache.keys()).length, 0, errors.join("; "));
+        const keys = await cache.keys();
+        const key = keys.find((request: Request) =>
+          request.url.includes("voice=split-test"),
+        );
+        assert.ok(key, errors.join("; "));
+        const params = new URL(key.url).searchParams;
+        assert.equal(params.get("cacheVersion"), "1");
+        assert.equal(params.get("timestamps"), "1");
+        assert.equal(
+          (await cache.match(key)).headers.get("X-Zotero-Timestamps"),
+          "[]",
+        );
         previous.toggleReadAloudPaused(true);
         assert.isTrue(
           (previous._readAloudManager || previous._state.readAloudState).paused,
