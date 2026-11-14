@@ -1,5 +1,6 @@
 import { readerRuntime } from "../../platform/readerRuntime";
 import { annotationStore } from "../../platform/annotationStore";
+import { createGetSDTPack } from "../../platform/readerSDT";
 import { buildSplitReaderConfig } from "./readerConfig";
 
 interface ReaderHostCallbacks {
@@ -105,8 +106,12 @@ export class SplitReaderHost {
         autoDisableTextTool: Zotero.Prefs.get("reader.autoDisableTool.text"),
         autoDisableImageTool: Zotero.Prefs.get("reader.autoDisableTool.image"),
         sidebarView: Zotero.Prefs.get("reader.lastSidebarTab"),
+        readAloudHighlightGranularity: Zotero.Prefs.get(
+          "reader.readAloud.highlightGranularity",
+        ),
       },
       readAloudConfig,
+      getSDTPack: createGetSDTPack(item.id, win),
       viewState,
       callbacks: {
         openContextMenu: () => {

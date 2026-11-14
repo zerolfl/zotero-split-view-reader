@@ -243,6 +243,217 @@ describe("split reader integration", function () {
     }
   });
 
+  describe("read aloud bridge regressions", function () {
+    it("registers PDF scroll listeners without privileged option warnings", async function () {
+      const warnings: string[] = [];
+      const listener = {
+        observe(message: any) {
+          const text = String(message.message);
+          if (
+            text.includes("Security wrapper denied access") &&
+            text.includes('"capture"')
+          )
+            warnings.push(text);
+        },
+      };
+      Services.console.registerListener(listener);
+      try {
+        const state = await open(false);
+        setPrimarySide(state.tabID, "right");
+        await Zotero.Promise.delay(100);
+        assert.deepEqual(warnings, []);
+      } finally {
+        Services.console.unregisterListener(listener);
+      }
+    });
+
+    it("loads native Read Aloud text for each split attachment", async function () {
+      this.timeout(60000);
+      if (typeof (Zotero as any).SDT?.getPack !== "function") this.skip();
+      const state = await open(false);
+      for (const browser of [state.leftBrowser, state.rightBrowser]) {
+        const reader = readerRuntime.getInternalReaderFromBrowser(browser);
+        assert.isFunction(
+          reader._getSDTPack,
+          "Reader has its native text provider",
+        );
+        const result = await reader._getSDTPack(contentData(browser, {}));
+        assert.isTrue(result.ok, JSON.stringify(result));
+        assert.isAbove(result.bytes.byteLength, 0);
+        readerReadAloud.setVoices(reader, browser.contentWindow!, {
+          en: { voice: "test-voice", speed: 1 },
+        });
+        const document = (browser.contentWindow as any).wrappedJSObject
+          .document;
+        const button = document.getElementById("read-aloud");
+        assert.ok(button);
+        button.click();
+        for (
+          let attempt = 0;
+          attempt < 500 && !reader._state.readAloudState.lang;
+          attempt++
+        )
+          await Zotero.Promise.delay(30);
+        assert.isNotEmpty(
+          reader._state.readAloudState.lang,
+          "Read Aloud finishes text preparation",
+        );
+        reader.toggleReadAloudPopup(false);
+      }
+    });
+
+    it("decodes bridged audio for extracted text and pauses the other side", async function () {
+      this.timeout(60000);
+      if (Number.parseInt(Zotero.version) < 9) this.skip();
+      const runner = (Zotero.Sync as any).Runner;
+      const originalClient = runner.getAPIClient;
+      const requests: { text: string; voice: string }[] = [];
+      const restoreAudio: (() => void)[] = [];
+      const wav = new ArrayBuffer(44 + 8000 * 2 * 4);
+      const header = new DataView(wav);
+      const write = (offset: number, value: string) => {
+        for (let i = 0; i < value.length; i++)
+          header.setUint8(offset + i, value.charCodeAt(i));
+      };
+      write(0, "RIFF");
+      header.setUint32(4, wav.byteLength - 8, true);
+      write(8, "WAVEfmt ");
+      header.setUint32(16, 16, true);
+      header.setUint16(20, 1, true);
+      header.setUint16(22, 1, true);
+      header.setUint32(24, 8000, true);
+      header.setUint32(28, 16000, true);
+      header.setUint16(32, 2, true);
+      header.setUint16(34, 16, true);
+      write(36, "data");
+      header.setUint32(40, wav.byteLength - 44, true);
+      const audio = new (Zotero.getMainWindow() as any).Blob([wav], {
+        type: "audio/wav",
+      });
+      runner.getAPIClient = () => ({
+        getReadAloudVoices: async () => ({
+          voices: {
+            standard: [
+              {
+                creditsPerMinute: 1,
+                segmentGranularity: "paragraph",
+                cacheVersion: 1,
+                voices: { "split-test": { label: "Test" } },
+                locales: { "en-US": { default: ["split-test"], other: [] } },
+              },
+            ],
+          },
+          standardCreditsRemaining: 100,
+          premiumCreditsRemaining: 100,
+          devMode: false,
+        }),
+        getReadAloudAudio: async (segment: any, voice: string) => {
+          requests.push({ text: segment.text, voice });
+          return { audio: audio.slice() };
+        },
+        getReadAloudCreditsRemaining: async () => ({
+          standardCreditsRemaining: 100,
+          premiumCreditsRemaining: 100,
+        }),
+      });
+      try {
+        const state = await open(false);
+        let previous: any;
+        for (const browser of [state.leftBrowser, state.rightBrowser]) {
+          const reader = readerRuntime.getInternalReaderFromBrowser(browser);
+          const win = (browser.contentWindow as any).wrappedJSObject;
+          const originalAudioContext = win.AudioContext;
+          win.AudioContext = new win.Function(`
+            return class extends OfflineAudioContext {
+              constructor() { super(1, 44100 * 4, 44100); }
+              resume() { return Promise.resolve(); }
+              close() { return Promise.resolve(); }
+            };
+          `)();
+          restoreAudio.push(() => {
+            reader.toggleReadAloudPopup(false);
+            win.AudioContext = originalAudioContext;
+          });
+          readerReadAloud.setVoices(reader, browser.contentWindow!, {
+            en: { voice: "split-test", speed: 1 },
+          });
+          reader._updateState(contentData(browser, { loggedIn: true }));
+          const document = (browser.contentWindow as any).wrappedJSObject
+            .document;
+          document.getElementById("read-aloud").click();
+          const playback = () => {
+            const current =
+              reader._readAloudManager || reader._state.readAloudState;
+            return {
+              active: current.active,
+              paused: current.paused,
+              lang: current.lang,
+              voice: current.selectedVoiceID ?? current.voice,
+              activeSegment: current.activeSegment,
+              segments: current.segments,
+              buffering: current.buffering ?? current.controller?.buffering,
+              error: current.error ?? current.controller?.error ?? null,
+            };
+          };
+          for (
+            let i = 0;
+            i < 500 &&
+            !(playback().activeSegment && playback().buffering === false);
+            i++
+          )
+            await Zotero.Promise.delay(30);
+          const manager = playback();
+          assert.isNull(manager.error);
+          assert.ok(
+            manager.activeSegment,
+            JSON.stringify({
+              message: "decoded audio starts playing",
+              lang: manager.lang,
+              voice: manager.voice,
+              active: manager.active,
+              paused: manager.paused,
+              segments: manager.segments?.length,
+              builtSegments: reader._readAloudSegments?.segments?.length,
+              firstRun: reader._state.readAloudFirstRunPopup,
+              requests,
+              errors,
+            }),
+          );
+          assert.include(
+            manager.activeSegment.text,
+            "Split view compatibility test",
+          );
+          assert.equal(manager.voice, "split-test");
+          assert.isFalse(manager.paused);
+          assert.isFalse(manager.buffering);
+          await Zotero.Promise.delay(300);
+          assert.isNull(
+            document.querySelector(".read-aloud-popup .loading-spinner"),
+          );
+          if (previous)
+            assert.isTrue(
+              (previous._readAloudManager || previous._state.readAloudState)
+                .paused,
+            );
+          previous = reader;
+        }
+        assert.isAbove(requests.length, 0);
+        assert.isTrue(requests.every(({ voice }) => voice === "split-test"));
+        const cache = await (Zotero.getMainWindow() as any).caches.open(
+          "read-aloud",
+        );
+        assert.isAbove((await cache.keys()).length, 0, errors.join("; "));
+        previous.toggleReadAloudPaused(true);
+        assert.isTrue(
+          (previous._readAloudManager || previous._state.readAloudState).paused,
+        );
+      } finally {
+        for (const restore of restoreAudio) restore();
+        runner.getAPIClient = originalClient;
+      }
+    });
+  });
+
   describe("reader interactions", function () {
     let followFocus: boolean;
 

@@ -2,14 +2,18 @@ export async function createPDFAttachment(title: string): Promise<Zotero.Item> {
   const parent = new Zotero.Item("journalArticle");
   parent.setField("title", title);
   await parent.saveTx();
-  const text = "BT /F1 18 Tf 72 700 Td (Split view compatibility test) Tj ET";
+  const text =
+    "BT /F1 12 Tf 72 500 Td (Split view compatibility test. This paragraph provides readable body text.) Tj ET";
+  const secondText =
+    "BT /F1 12 Tf 72 500 Td (A different paragraph on the second page supports native text extraction.) Tj ET";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>",
     `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${secondText.length} >>\nstream\n${secondText}\nendstream`,
   ];
   let pdf = "%PDF-1.4\n";
   const offsets = [0];

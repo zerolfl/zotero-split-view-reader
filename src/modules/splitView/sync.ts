@@ -106,9 +106,7 @@ export class SplitSync {
           this.syncViews(tabID);
         });
       };
-      primaryContainer.addEventListener("scroll", state.scrollHandler, {
-        passive: true,
-      });
+      primaryContainer.addEventListener("scroll", state.scrollHandler, false);
       state.scrollHandlerBrowser = primaryBrowser;
     } catch (error) {
       Zotero.debug(

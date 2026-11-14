@@ -25,6 +25,7 @@ interface ReaderConfigOptions {
   readerWindow: Window;
   preferences: Record<string, any>;
   readAloudConfig: Record<string, any>;
+  getSDTPack: ((options?: any) => Promise<any>) | null;
   viewState?: any;
   callbacks: ReaderConfigCallbacks;
 }
@@ -48,6 +49,7 @@ export function buildSplitReaderConfig(options: ReaderConfigOptions) {
     showAnnotations: true,
     ...options.preferences,
     ...options.readAloudConfig,
+    getSDTPack: options.getSDTPack,
     primaryViewState: options.viewState,
     onOpenContextMenu: callbacks.openContextMenu,
     onToggleSidebar: callbacks.toggleSidebar,

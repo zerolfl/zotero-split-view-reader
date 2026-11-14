@@ -27,6 +27,7 @@ test("reader host builds localized config, clones it and runs callbacks after re
     library: { libraryType: "user" },
   };
   const callback = () => {};
+  const getSDTPack = () => {};
   const preferences = { get: (key) => (key === "layout" ? "stacked" : key) };
   const { buildSplitReaderConfig } = load(
     "src/modules/splitView/readerConfig.ts",
@@ -63,6 +64,13 @@ test("reader host builds localized config, clones it and runs callbacks after re
         annotationStore: {
           load: async () => [{ id: "annotation" }],
           isReadOnly: () => false,
+        },
+      },
+      "../../platform/readerSDT": {
+        createGetSDTPack: (itemID, targetWindow) => {
+          assert.equal(itemID, item.id);
+          assert.equal(targetWindow, win);
+          return getSDTPack;
         },
       },
       "./readerConfig": { buildSplitReaderConfig },
@@ -109,6 +117,11 @@ test("reader host builds localized config, clones it and runs callbacks after re
   assert.equal(config.contextPaneOpen, true);
   assert.equal(config.showContextPaneToggle, true);
   assert.equal(config.enableReadAloud, true);
+  assert.equal(config.getSDTPack, getSDTPack);
+  assert.equal(
+    config.readAloudHighlightGranularity,
+    "reader.readAloud.highlightGranularity",
+  );
   assert.equal(config.fontFamily, "reader.ebookFontFamily");
   assert.equal(config.primaryViewState.pageIndex, 2);
   assert.equal(config.onToggleSidebar, callback);

@@ -37,4 +37,14 @@ const ctx = await Config.loadConfig({
 if (process.argv[2])
   process.env.ZOTERO_PLUGIN_ZOTERO_BIN_PATH = process.argv[2];
 process.env.ZOTERO_PLUGIN_KILL_COMMAND = `"${process.execPath}" -e "process.exit(0)"`;
-await new Test(ctx).run();
+const tester = new Test(ctx);
+const onExit = tester.onZoteroExit;
+tester.onZoteroExit = () => {
+  const exitCode = tester.zotero.zotero.exitCode;
+  if (exitCode !== 0) {
+    process.stderr.write(`Zotero exited abnormally (${exitCode})\n`);
+    process.exit(1);
+  }
+  onExit();
+};
+await tester.run();

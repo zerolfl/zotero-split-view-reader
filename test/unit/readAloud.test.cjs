@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const { Blob } = require("node:buffer");
 const { setTimeout, clearTimeout } = require("node:timers");
 const { URLSearchParams } = require("node:url");
 const { load } = require("./helpers.cjs");
@@ -16,6 +17,7 @@ function runtime() {
     openDialog: () => {},
     caches: { open: async () => null },
   };
+  const nativeScope = { Response: globalThis.Response };
   const observers = new Map();
   const globals = {
     Promise,
@@ -23,7 +25,12 @@ function runtime() {
     Response: globalThis.Response,
     setTimeout,
     clearTimeout,
-    Components: { utils: { cloneInto: (value) => value } },
+    Components: {
+      utils: {
+        cloneInto: (value) => value,
+        getGlobalForObject: () => nativeScope,
+      },
+    },
     PathUtils: { join: (...parts) => parts.join("/") },
     IOUtils: {
       readJSON: async () => ({}),
@@ -139,18 +146,50 @@ test("all remote operations reject in the content realm on API failure", async (
 
 test("missing or rejected cache still falls back to the audio API", async () => {
   const { platform, targetWindow, mainWindow } = runtime();
-  const remote = platform.getReadAloudRemoteInterface(targetWindow);
-  assert.equal(
-    (await remote.getAudio({ text: "text" }, { id: "voice" })).audio,
-    "audio",
-  );
-  mainWindow.caches.open = async () => {
-    throw new Error("cache unavailable");
+  for (const fails of [false, true]) {
+    mainWindow.caches.open = async () => {
+      if (fails) throw new Error("cache unavailable");
+      return null;
+    };
+    const remote = platform.getReadAloudRemoteInterface(targetWindow);
+    assert.equal(
+      (await remote.getAudio({ text: "text" }, { id: "voice" })).audio,
+      "audio",
+    );
+  }
+});
+
+test("audio caching uses the native service Response and opens its cache once", async () => {
+  const { platform, targetWindow, mainWindow, globals, api } = runtime();
+  const audio = new Blob(["audio"], { type: "audio/wav" });
+  api.getReadAloudAudio = async () => ({ audio });
+  const stored = [];
+  let opened = 0;
+  globals.Response = class {
+    constructor() {
+      throw new Error("plugin realm Response must not be used");
+    }
   };
+  mainWindow.Response = globals.Response;
+  mainWindow.caches.open = async () => {
+    opened++;
+    return {
+      match: async () => null,
+      put: async (url, response) => stored.push({ url, response }),
+    };
+  };
+  const remote = platform.getReadAloudRemoteInterface(targetWindow);
+  const result = await remote.getAudio({ text: "text" }, { id: "voice" });
+  assert.equal(result.audio, audio);
+  assert.equal(stored.length, 1);
   assert.equal(
-    (await remote.getAudio({ text: "text" }, { id: "voice" })).audio,
-    "audio",
+    stored[0].url,
+    "https://read-aloud.zotero.invalid/audio?voice=voice&text=text",
   );
+  assert.equal(await stored[0].response.text(), "audio");
+  await remote.getAudio({ text: "another" }, { id: "voice" });
+  assert.equal(opened, 1);
+  assert.equal(stored.length, 2);
 });
 
 test("voice write observation filters paths and restores its own wrapper", async () => {

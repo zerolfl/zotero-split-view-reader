@@ -135,6 +135,10 @@ function childPromise(
 export function getReadAloudRemoteInterface(targetWindow: Window): any {
   if (!isReadAloudAvailable()) return null;
   const mainWindow = Zotero.getMainWindow() as any;
+  const audioCache = Promise.resolve().then(
+    () => mainWindow?.caches?.open("read-aloud") || null,
+  );
+  audioCache.catch(() => {});
   const client = async (sample = false) => {
     const apiKey = sample
       ? null
@@ -153,7 +157,7 @@ export function getReadAloudRemoteInterface(targetWindow: Window): any {
           new URLSearchParams({ voice: voice.id, text: segment.text });
         let cache: Cache | null = null;
         try {
-          cache = (await mainWindow?.caches?.open("read-aloud")) || null;
+          cache = await audioCache;
           const cached = await cache?.match(cacheURL);
           if (cached) return { audio: await cached.blob() };
         } catch (error) {
@@ -164,7 +168,10 @@ export function getReadAloudRemoteInterface(targetWindow: Window): any {
         ).getReadAloudAudio(segment, voice.id);
         if (result.audio && cache) {
           try {
-            await cache.put(cacheURL, new Response(result.audio));
+            const NativeResponse = (
+              Components.utils.getGlobalForObject(Zotero.Reader) as any
+            ).Response;
+            await cache.put(cacheURL, new NativeResponse(result.audio));
           } catch (error) {
             Zotero.logError(error as Error);
           }
