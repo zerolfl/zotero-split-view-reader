@@ -100,8 +100,8 @@ export class SplitSession {
     });
   }
 
-  prepareClose(tabID: string, itemID: number): void {
-    const tabs = tabsForWindow();
+  prepareClose(tabID: string, itemID: number, win?: Window): void {
+    const tabs = tabsForWindow(win);
     tabs.clearDataFields(tabID, [
       "leftItemID",
       "rightItemID",

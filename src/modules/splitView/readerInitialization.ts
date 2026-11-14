@@ -52,11 +52,17 @@ export class SplitReaderInitialization {
     viewState?: any,
     isRight = false,
   ): Promise<void> {
+    const state = this.deps.getState(tabID);
     return this.host.initialize({
       browser,
       item,
       viewState,
       isRight,
+      isActive: () =>
+        !!state &&
+        this.deps.getState(tabID) === state &&
+        !state.isCleaningUp &&
+        (browser === state.leftBrowser || browser === state.rightBrowser),
       getReadAloudConfig: (ftl, onStatus) =>
         this.deps.getReadAloudConfig(browser, ftl, onStatus),
       callbacks: {

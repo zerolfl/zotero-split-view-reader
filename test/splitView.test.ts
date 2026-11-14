@@ -76,6 +76,61 @@ describe("split reader integration", function () {
     factory.primaryView.setSide(tabID, side);
   }
 
+  describe("conversion recovery", function () {
+    for (const failure of ["shell", "left", "right"]) {
+      it(`restores the original reader after ${failure} initialization fails`, async function () {
+        const reader = (await Zotero.Reader.open(left.id))!;
+        await readerRuntime.waitForReaderReady(reader);
+        await readerView.applyViewStateToReader(reader, {
+          pageIndex: 1,
+          scale: 100,
+        });
+        const tabID = reader.tabID;
+        const deps = factory.creation.deps;
+        const initialize = deps.initializeReader;
+        const create = factory.splitReaderTab.create;
+        if (failure === "shell") {
+          factory.splitReaderTab.create = () => {
+            throw new Error("injected shell failure");
+          };
+        } else {
+          deps.initializeReader = async (...args: any[]) => {
+            if (args[5] === (failure === "right"))
+              throw new Error("injected reader failure");
+            return initialize(...args);
+          };
+        }
+        let failed = false;
+        try {
+          await factory.conversion.convertDifferentPDF(reader, right);
+        } catch (error) {
+          failed = true;
+          assert.include(String(error), "injected");
+        } finally {
+          deps.initializeReader = initialize;
+          factory.splitReaderTab.create = create;
+        }
+        assert.isTrue(failed);
+        const recovered = Zotero.Reader.getByTabID(tabID)!;
+        assert.ok(recovered, "native reader is restored in the original tab");
+        assert.equal(recovered.itemID, left.id);
+        assert.equal(
+          readerView.getImmediateViewStateFromReader(recovered).pageIndex,
+          1,
+        );
+        const tabs = Zotero.getMainWindow().Zotero_Tabs as any;
+        assert.isUndefined(tabs._getTab(tabID).tab.data.isSplitView);
+        assert.isFalse(factory.stateStore.has(tabID));
+        await Zotero.Promise.delay(250);
+        assert.equal(
+          recovered._tabContainer.querySelectorAll("browser").length,
+          1,
+        );
+        assert.isFalse(factory.stateStore.has(tabID));
+      });
+    }
+  });
+
   async function waitFor(
     check: () => boolean,
     label = "reader state",

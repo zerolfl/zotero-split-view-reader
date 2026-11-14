@@ -78,6 +78,7 @@ test("wires reader callbacks and tracks only the active side view state", async 
   assert.strictEqual(options.item, item);
   assert.strictEqual(options.viewState, viewState);
   assert.equal(options.isRight, true);
+  assert.equal(options.isActive(), true);
   options.callbacks.onViewStateChange(viewState);
   assert.equal(fixture.state.rightViewState.pageIndex, viewState.pageIndex);
   assert.notStrictEqual(fixture.state.rightViewState, viewState);
@@ -85,6 +86,7 @@ test("wires reader callbacks and tracks only the active side view state", async 
   assert.ok(fixture.events.some(([name]) => name === "last-position"));
 
   fixture.state.isCleaningUp = true;
+  assert.equal(options.isActive(), false);
   options.callbacks.onViewStateChange({ pageIndex: 8 });
   assert.equal(fixture.state.rightViewState.pageIndex, 4);
 });

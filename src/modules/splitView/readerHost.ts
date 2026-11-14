@@ -23,6 +23,7 @@ interface ReaderHostConfig {
   item: Zotero.Item;
   viewState?: any;
   isRight: boolean;
+  isActive?: () => boolean;
   getReadAloudConfig: (
     ftl: string[],
     onStatus: (status: any) => void,
@@ -33,7 +34,12 @@ interface ReaderHostConfig {
 export class SplitReaderHost {
   async initialize(options: ReaderHostConfig): Promise<void> {
     const { browser, item, viewState, isRight, callbacks } = options;
+    const checkActive = () => {
+      if (options.isActive && !options.isActive())
+        throw new Error("Split reader initialization cancelled");
+    };
     await readerRuntime.waitForBrowserLoad(browser);
+    checkActive();
 
     const win = browser.contentWindow;
     if (!win) throw new Error("Browser contentWindow not available");
@@ -128,6 +134,7 @@ export class SplitReaderHost {
       },
     });
 
+    checkActive();
     wrappedWin.createReader(
       Components.utils.cloneInto(readerConfig, win, {
         wrapReflectors: true,
@@ -135,6 +142,7 @@ export class SplitReaderHost {
       }),
     );
     await readerRuntime.waitForInternalReader(browser);
+    checkActive();
     callbacks.afterReady();
   }
 }

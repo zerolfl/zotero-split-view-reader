@@ -88,9 +88,10 @@ export class SplitViewCreationService {
     });
     this.deps.setState(tabID, state);
 
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       this.deps.setupShell(tabID, state, shell, win);
-      await Promise.all([
+      const initialized = Promise.all([
         this.deps.initializeReader(
           tabID,
           shell.leftBrowser,
@@ -108,6 +109,17 @@ export class SplitViewCreationService {
           true,
         ),
       ]);
+      await Promise.race([
+        initialized,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Split reader initialization timed out")),
+            30000,
+          );
+        }),
+      ]);
+      if (state.isCleaningUp)
+        throw new Error("Split reader initialization cancelled");
 
       this.deps.showLoaded(isSamePDF);
       state.activeSide = "left";
@@ -131,6 +143,8 @@ export class SplitViewCreationService {
     } catch (error) {
       this.deps.cleanup(tabID);
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

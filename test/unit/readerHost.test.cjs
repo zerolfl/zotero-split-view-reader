@@ -77,7 +77,7 @@ test("reader host builds localized config, clones it and runs callbacks after re
     },
   );
   const host = new SplitReaderHost();
-  await host.initialize({
+  const options = {
     browser: { contentWindow: win },
     item,
     viewState: { pageIndex: 2 },
@@ -104,7 +104,8 @@ test("reader host builds localized config, clones it and runs callbacks after re
       toggleContextPane: () => contextPaneToggled++,
       afterReady: () => ready++,
     },
-  });
+  };
+  await host.initialize(options);
 
   assert.deepEqual(calls, ["browser", "reader"]);
   assert.deepEqual(fetchedFtl, [
@@ -136,5 +137,10 @@ test("reader host builds localized config, clones it and runs callbacks after re
   assert.equal(contextPaneToggled, 1);
   config.onOpenLink("https://example.com");
   assert.equal(launchedURL, "https://example.com");
+  assert.equal(ready, 1);
+  await assert.rejects(
+    host.initialize({ ...options, isActive: () => false }),
+    /initialization cancelled/,
+  );
   assert.equal(ready, 1);
 });

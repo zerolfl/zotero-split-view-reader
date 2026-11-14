@@ -399,7 +399,7 @@ export class SplitViewFactory {
     scheduleDelayedSetup: (...args) => this.delayedSetup.schedule(...args),
     writeSession: (state) => this.session.write(state),
     renameTab: (tabID) => this.tabTitles.renameTab(tabID),
-    cleanup: (tabID) => this.tabCleanup.cleanupAndSave(tabID),
+    cleanup: (tabID) => this.tabCleanup.cleanup(tabID),
   });
   private static conversion = new SplitViewConversionService({
     getMainWindow: () => Zotero.getMainWindow(),
@@ -412,6 +412,19 @@ export class SplitViewFactory {
     createShell: (...args) => this.splitReaderTab.create(...args),
     createAndInitialize: (options) =>
       this.creation.createAndInitialize(options),
+    restoreReader: async (win, tabID, container, itemID, viewState) => {
+      this.tabCleanup.cleanup(tabID);
+      this.session.prepareClose(tabID, itemID, win);
+      this.splitReaderTab.restore(win, tabID, container);
+      const reader = await readerApi.open(itemID, undefined, {
+        tabID,
+        allowDuplicate: true,
+        openInBackground: tabsForWindow(win).selectedID !== tabID,
+      });
+      if (!reader) throw new Error("Reader recovery did not return a reader");
+      await readerRuntime.waitForReaderReady(reader);
+      await readerView.applyViewStateToReader(reader, viewState);
+    },
   });
   private static readerPopupMenu = new SplitReaderPopupMenu({
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),

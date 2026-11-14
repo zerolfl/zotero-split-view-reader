@@ -19,6 +19,13 @@ export interface SplitViewConversionDependencies {
     container: Element,
   ): SplitReaderTabShell;
   createAndInitialize(options: SplitViewCreationOptions): Promise<void>;
+  restoreReader(
+    win: Window,
+    tabID: string,
+    container: Element,
+    itemID: number,
+    viewState: any,
+  ): Promise<void>;
 }
 
 export class SplitViewConversionService {
@@ -38,18 +45,15 @@ export class SplitViewConversionService {
     const container = this.deps.getContainer(win, tabID);
     if (!container) throw new Error("Tab container not found");
 
-    const leftViewState =
-      restored?.leftViewState ?? (await this.deps.getViewState(currentReader));
+    const currentViewState = await this.deps.getViewState(currentReader);
+    const leftViewState = restored?.leftViewState ?? currentViewState;
     const rightViewState =
       restored?.rightViewState ??
       (await this.deps.getStoredViewState(secondaryPDF));
 
-    await this.deps.closeReader(currentReader);
-    const shell = this.deps.createShell(win, tabID, container);
-    await this.deps.createAndInitialize({
+    await this.convert(currentReader, container, currentViewState, {
       win,
       tabID,
-      shell,
       leftItem,
       rightItem: secondaryPDF,
       leftViewState,
@@ -71,21 +75,48 @@ export class SplitViewConversionService {
     const container = this.deps.getContainer(win, tabID);
     if (!container) throw new Error("Tab container not found");
 
-    const leftViewState =
-      restored?.leftViewState ?? (await this.deps.getViewState(currentReader));
+    const currentViewState = await this.deps.getViewState(currentReader);
+    const leftViewState = restored?.leftViewState ?? currentViewState;
     const rightViewState = restored?.rightViewState ?? leftViewState;
 
-    await this.deps.closeReader(currentReader);
-    const shell = this.deps.createShell(win, tabID, container);
-    await this.deps.createAndInitialize({
+    await this.convert(currentReader, container, currentViewState, {
       win,
       tabID,
-      shell,
       leftItem: item,
       rightItem: item,
       leftViewState,
       rightViewState,
       isSamePDF: true,
     });
+  }
+
+  private async convert(
+    reader: any,
+    container: Element,
+    viewState: any,
+    options: Omit<SplitViewCreationOptions, "shell">,
+  ): Promise<void> {
+    const { win, tabID } = options;
+    await this.deps.closeReader(reader);
+    try {
+      const shell = this.deps.createShell(win, tabID, container);
+      await this.deps.createAndInitialize({ ...options, shell });
+    } catch (error) {
+      try {
+        await this.deps.restoreReader(
+          win,
+          tabID,
+          container,
+          reader.itemID,
+          viewState,
+        );
+      } catch (recoveryError) {
+        throw new AggregateError(
+          [error, recoveryError],
+          "Split view reader recovery failed",
+        );
+      }
+      throw error;
+    }
   }
 }

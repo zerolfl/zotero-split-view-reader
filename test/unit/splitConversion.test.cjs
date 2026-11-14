@@ -11,6 +11,7 @@ function setup({
   item = { id: 1 },
   container = {},
   viewState = { pageIndex: 3 },
+  failAt,
 } = {}) {
   const events = [];
   const win = { document: {} };
@@ -36,9 +37,14 @@ function setup({
     closeReader: async (reader) => events.push(["close", reader]),
     createShell: (currentWin, tabID, currentContainer) => {
       events.push(["shell", currentWin, tabID, currentContainer]);
+      if (failAt === "shell") throw new Error("shell failed");
       return shell;
     },
-    createAndInitialize: async (options) => events.push(["create", options]),
+    createAndInitialize: async (options) => {
+      events.push(["create", options]);
+      if (failAt === "reader") throw new Error("reader failed");
+    },
+    restoreReader: async (...args) => events.push(["restore", ...args]),
   });
   return { events, item, service, shell, viewState, win };
 }
@@ -57,6 +63,7 @@ test("converts different PDFs and restores each side's position", async () => {
   assert.deepEqual(names, [
     "item",
     "container",
+    "view-state",
     "stored-state",
     "close",
     "shell",
@@ -71,6 +78,28 @@ test("converts different PDFs and restores each side's position", async () => {
   assert.strictEqual(options.leftViewState, restoredLeft);
   assert.deepEqual(options.rightViewState, { pageIndex: 8 });
   assert.equal(options.isSamePDF, false);
+});
+
+test("rolls back shell and reader failures using the current reading position", async () => {
+  for (const failAt of ["shell", "reader"]) {
+    for (const same of [false, true]) {
+      const fixture = setup({ failAt });
+      const reader = { tabID: "tab", itemID: 1 };
+      const restored = { leftViewState: { pageIndex: 8 } };
+      await assert.rejects(
+        same
+          ? fixture.service.convertSamePDF(reader, restored)
+          : fixture.service.convertDifferentPDF(reader, { id: 2 }, restored),
+        new RegExp(`${failAt} failed`),
+      );
+      const [name, win, tabID, , itemID, view] = fixture.events.at(-1);
+      assert.equal(name, "restore");
+      assert.strictEqual(win, fixture.win);
+      assert.equal(tabID, "tab");
+      assert.equal(itemID, 1);
+      assert.strictEqual(view, fixture.viewState);
+    }
+  }
 });
 
 test("converts the same PDF and uses the captured position for both sides", async () => {

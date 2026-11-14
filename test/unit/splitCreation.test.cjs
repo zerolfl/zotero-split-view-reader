@@ -1,15 +1,15 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const { setTimeout, clearTimeout } = require("node:timers");
 const { load } = require("./helpers.cjs");
 
 const { createSplitTabState } = load("src/modules/splitView/state.ts");
-const { SplitViewCreationService } = load(
-  "src/modules/splitView/creation.ts",
-  {},
-  { "./state": { createSplitTabState } },
-);
-
-function setup({ failInitialization = false } = {}) {
+function setup({ failInitialization = false, timers, initialize } = {}) {
+  const { SplitViewCreationService } = load(
+    "src/modules/splitView/creation.ts",
+    timers || { setTimeout, clearTimeout },
+    { "./state": { createSplitTabState } },
+  );
   const events = [];
   const win = {};
   const leftItem = { id: 1, parentItemID: 11 };
@@ -51,6 +51,7 @@ function setup({ failInitialization = false } = {}) {
         viewState,
         isRight,
       ]);
+      if (initialize) await initialize(isRight);
       if (failInitialization && isRight) throw new Error("reader failed");
     },
     showLoaded: (isSamePDF) => events.push(["loaded", isSamePDF]),
@@ -112,6 +113,39 @@ test("initializes different PDFs and persists the shared split setup", async () 
   assert.strictEqual(scheduledWin, fixture.win);
   assert.strictEqual(leftBrowser, fixture.shell.leftBrowser);
   assert.strictEqual(rightBrowser, fixture.shell.rightBrowser);
+});
+
+test("times out a stalled reader and ignores a later initialization completion", async () => {
+  let expire;
+  let release;
+  const stalled = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = setup({
+    timers: {
+      setTimeout: (callback) => {
+        expire = callback;
+        return 1;
+      },
+      clearTimeout: () => {},
+    },
+    initialize: () => stalled,
+  });
+  const result = fixture.service.createAndInitialize({
+    win: fixture.win,
+    tabID: "stalled-tab",
+    shell: fixture.shell,
+    leftItem: fixture.leftItem,
+    rightItem: fixture.rightItem,
+    isSamePDF: false,
+  });
+  expire();
+  await assert.rejects(result, /initialization timed out/);
+  release();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(fixture.events.at(-1), ["cleanup", "stalled-tab"]);
+  assert.ok(!fixture.events.some(([name]) => name === "session"));
 });
 
 test("binds annotations for same-PDF creation", async () => {

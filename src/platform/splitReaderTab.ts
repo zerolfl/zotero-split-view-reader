@@ -34,14 +34,8 @@ export class SplitReaderTabAdapter {
     return win.document.getElementById(tabID);
   }
 
-  create(
-    win: Window,
-    tabID: string,
-    oldContainer: Element,
-  ): SplitReaderTabShell {
-    // Cloning drops the closed reader's listeners from the original tab content.
+  private cloneContainer(win: Window, oldContainer: Element): HTMLElement {
     const container = oldContainer.cloneNode(false) as HTMLElement;
-    oldContainer.parentNode?.replaceChild(container, oldContainer);
 
     // Restore TabContent methods that Zotero calls on the cloned container.
     (container as any).setContextPaneOpen = (open: boolean) => {
@@ -61,6 +55,25 @@ export class SplitReaderTabAdapter {
         new win.CustomEvent("tab-selection-change", { detail: { selected } }),
       );
     };
+    return container;
+  }
+
+  restore(win: Window, tabID: string, original: Element): void {
+    const current = this.getTabContainer(win, tabID);
+    if (!current?.parentNode)
+      throw new Error("Reader tab is no longer available");
+    current.parentNode.replaceChild(
+      this.cloneContainer(win, original),
+      current,
+    );
+  }
+
+  create(
+    win: Window,
+    tabID: string,
+    oldContainer: Element,
+  ): SplitReaderTabShell {
+    const container = this.cloneContainer(win, oldContainer);
 
     Object.assign((container as any).style, {
       display: "flex",
@@ -142,6 +155,9 @@ export class SplitReaderTabAdapter {
       // Split tabs do not need additional selection handling.
     });
 
+    if (!oldContainer.parentNode)
+      throw new Error("Reader tab is no longer available");
+    oldContainer.parentNode.replaceChild(container, oldContainer);
     return {
       container,
       mainHbox,
