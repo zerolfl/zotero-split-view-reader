@@ -697,7 +697,7 @@ export class SplitViewFactory {
   }
 
   /**
-   * Register a named command in the Shift+P command palette.
+   * Register named commands in the configurable command palette.
    * Context-aware: in a reader tab it starts the split view flow immediately;
    * in the library or any other tab it enters the two-step PDF selection flow.
    */

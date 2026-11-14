@@ -49,6 +49,16 @@ describe(`startup (Zotero ${clientVersion})`, function () {
       ids.map((id) => ({ id: `${config.addonRef}-${id}` })),
     );
     assert.isNotEmpty(messages[0]?.value);
+    for (const id of [
+      "pref-command-shortcut",
+      "pref-command-shortcut-record",
+      "pref-command-shortcut-reset",
+    ]) {
+      const [message] = preferenceLocale.formatMessagesSync([
+        { id: `${config.addonRef}-${id}` },
+      ]);
+      assert.isNotEmpty(message?.value);
+    }
     for (const message of messages.slice(1))
       assert.isNotEmpty(
         message?.attributes?.find(({ name }) => name === "label")?.value,

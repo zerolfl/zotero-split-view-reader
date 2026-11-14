@@ -12,7 +12,8 @@ function runtime() {
       throw error;
     },
   };
-  const legacy = load("src/platform/legacyCommands.ts", { Zotero });
+  const shortcutModule = load("src/ui/commandShortcut.ts", {});
+  let configuredShortcut = "Shift+P";
   class PaletteView {
     constructor() {
       views.push(this);
@@ -46,8 +47,11 @@ function runtime() {
     "src/ui/commandPalette.ts",
     { Zotero },
     {
-      "../platform/legacyCommands": legacy,
       "../utils/locale": { getString: (key) => key },
+      "../utils/prefs": {
+        getPref: () => configuredShortcut,
+      },
+      "./commandShortcut": shortcutModule,
       "./paletteView": { PaletteView },
     },
   );
@@ -62,10 +66,18 @@ function runtime() {
     owner.dispatchEvent(event);
     return event;
   };
-  return { commandPalette, views, win, Zotero, shortcut };
+  return {
+    commandPalette,
+    views,
+    win,
+    shortcut,
+    setShortcut: (value) => {
+      configuredShortcut = value;
+    },
+  };
 }
 
-test("Shift+P opens commands, filters, starts once and releases the window", async () => {
+test("the configured shortcut opens commands and runs the selected command", async () => {
   const { commandPalette, views, win, shortcut } = runtime();
   let runs = 0;
   commandPalette.register(win, async () => {
@@ -89,8 +101,8 @@ test("Shift+P opens commands, filters, starts once and releases the window", asy
   assert.equal(shortcut().defaultPrevented, false);
 });
 
-test("command palette routes split and ordinary reader actions separately", () => {
-  const { commandPalette, views, win, shortcut } = runtime();
+test("command palette routes commands separately and reads a changed shortcut", () => {
+  const { commandPalette, views, win, shortcut, setShortcut } = runtime();
   const calls = [];
   commandPalette.register(win, [
     {
@@ -106,7 +118,16 @@ test("command palette routes split and ordinary reader actions separately", () =
       run: async () => calls.push("split"),
     },
   ]);
-  shortcut();
+  setShortcut("Ctrl+Alt+K");
+  assert.equal(shortcut().defaultPrevented, false);
+  assert.equal(
+    shortcut(
+      win,
+      {},
+      { key: "K", shiftKey: false, ctrlKey: true, altKey: true },
+    ).defaultPrevented,
+    true,
+  );
   assert.equal(views[0].rows.length, 2);
   views[0].handlers.input("reader");
   assert.deepEqual(
@@ -144,114 +165,4 @@ test("selection returns to commands and window unload settles external close", (
   selection.open("PDF", handlers);
   commandPalette.unregister(win);
   assert.equal(closes, 1);
-});
-
-function legacyPrompt(win, containers = 0) {
-  const prompt = {
-    promptNode: {
-      ownerDocument: win.document,
-      style: {},
-      querySelectorAll: () => Array(containers),
-    },
-    commands: [{ id: "other" }],
-    rendered: [],
-    showCommands(commands, clear) {
-      assert.equal(clear, true);
-      this.rendered = [...commands];
-      containers = 1;
-    },
-    exit() {},
-  };
-  return prompt;
-}
-
-test("legacy palette renders a late command without method hooks or duplicate shortcuts", () => {
-  const { commandPalette, views, win, Zotero, shortcut } = runtime();
-  let runs = 0;
-  commandPalette.register(win, [
-    {
-      id: "open-attachment-in-reader",
-      name: "Open in Zotero Reader",
-      description: "Split-View Reader",
-      run: async () => {
-        runs += 10;
-      },
-    },
-    {
-      id: "split-view-reader",
-      name: "Open in Split View",
-      description: "Split-View Reader",
-      run: async () => {
-        runs++;
-      },
-    },
-  ]);
-  const prompt = legacyPrompt(win);
-  const other = prompt.commands[0];
-  const originalExit = prompt.exit;
-  const originalShow = prompt.showCommands;
-  Zotero._toolkitGlobal = { prompt: { instance: prompt } };
-  assert.equal(shortcut().defaultPrevented, false);
-  assert.ok(!views[0].isOpen);
-  shortcut();
-  assert.equal(prompt.commands.length, 3);
-  assert.deepEqual(prompt.rendered, prompt.commands);
-  prompt.commands[1].callback();
-  assert.equal(runs, 10);
-  prompt.commands[2].callback();
-  assert.equal(runs, 11);
-  assert.equal(prompt.promptNode.style.display, "none");
-  commandPalette.unregister();
-  assert.deepEqual(prompt.commands, [other]);
-  assert.equal(prompt.exit, originalExit);
-  assert.equal(prompt.showCommands, originalShow);
-});
-
-test("a shared palette created later registers before Ctrl+P without consuming it", () => {
-  const { commandPalette, views, win, Zotero, shortcut } = runtime();
-  commandPalette.register(win, async () => {});
-  const prompt = legacyPrompt(win);
-  Zotero._toolkitGlobal = { prompt: { instance: prompt } };
-  const event = shortcut(win, {}, { ctrlKey: true, shiftKey: false });
-  assert.equal(event.defaultPrevented, false);
-  assert.ok(!views[0].isOpen);
-  assert.equal(prompt.rendered[1].id, "split-view-reader");
-  commandPalette.unregister();
-});
-
-test("registration refreshes an existing root list but preserves nested workflows", () => {
-  for (const containers of [1, 2]) {
-    const { commandPalette, win, Zotero } = runtime();
-    const prompt = legacyPrompt(win, containers);
-    Zotero._toolkitGlobal = { prompt: { instance: prompt } };
-    commandPalette.register(win, [
-      {
-        id: "open-attachment-in-reader",
-        name: "Open in Zotero Reader",
-        description: "Split-View Reader",
-        run: async () => {},
-      },
-      {
-        id: "split-view-reader",
-        name: "Open in Split View",
-        description: "Split-View Reader",
-        run: async () => {},
-      },
-    ]);
-    assert.equal(prompt.commands.length, 3);
-    assert.equal(prompt.rendered.length, containers === 1 ? 3 : 0);
-    commandPalette.unregister();
-  }
-});
-
-test("an incomplete shared palette keeps the working standalone shortcut", () => {
-  const { commandPalette, views, win, Zotero, shortcut } = runtime();
-  const prompt = legacyPrompt(win);
-  delete prompt.showCommands;
-  Zotero._toolkitGlobal = { prompt: { instance: prompt } };
-  commandPalette.register(win, async () => {});
-  assert.equal(shortcut().defaultPrevented, true);
-  assert.equal(views[0].isOpen, true);
-  assert.equal(views[0].rows.length, 1);
-  commandPalette.unregister();
 });

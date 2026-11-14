@@ -31,10 +31,12 @@
 
 ### Quick Start with Command Palette
 
-Press `Shift + P` to open Zotero's command palette:
+Press the configured shortcut (default: `Shift + P`) to open the plugin command palette:
 
 - **Open in Zotero Reader** opens one PDF in a regular Zotero Reader tab.
 - **Open in Split View** starts the split-view flow for two PDFs.
+
+Change the shortcut in `Edit` → `Settings` → `Split-View Reader` → `Command shortcut`.
 
 <p align="center">
   <img src="doc/command-example.png" width="650" alt="Command Palette" />

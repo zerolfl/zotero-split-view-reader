@@ -1,10 +1,19 @@
 import type { AttachmentSelectionView } from "../modules/attachmentSelector/types";
-import {
-  LegacyCommands,
-  type PaletteCommandRegistration,
-} from "../platform/legacyCommands";
 import { getString } from "../utils/locale";
+import { getPref } from "../utils/prefs";
+import {
+  DEFAULT_COMMAND_SHORTCUT,
+  isShortcutCaptureActive,
+  matchesShortcut,
+} from "./commandShortcut";
 import { PaletteView } from "./paletteView";
+
+interface PaletteCommandRegistration {
+  id: string;
+  name: string;
+  description: string;
+  run: () => Promise<void>;
+}
 
 class CommandPalette {
   private windows = new Map<
@@ -15,7 +24,6 @@ class CommandPalette {
       commands: PaletteCommandRegistration[];
     }
   >();
-  private legacy = new LegacyCommands();
 
   register(
     win: Window,
@@ -34,28 +42,21 @@ class CommandPalette {
             },
           ]
         : commands;
-    const registerLegacy = () => this.legacy.register(win, entries);
     const key = (event: KeyboardEvent) => {
-      if (event.repeat || event.altKey || event.key.toLowerCase() !== "p")
+      if (event.repeat || event.isComposing || isShortcutCaptureActive())
         return;
       const target = (event as any).originalTarget || event.target;
       if (target?.isContentEditable || (target && "value" in target)) return;
-      const legacy = registerLegacy();
-      if (
-        !event.shiftKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        legacy ||
-        event.defaultPrevented
-      )
-        return;
+      if (event.defaultPrevented) return;
+      const shortcut =
+        getPref("commandPaletteShortcut") || DEFAULT_COMMAND_SHORTCUT;
+      if (!matchesShortcut(event, shortcut)) return;
       event.preventDefault();
       event.stopPropagation();
       if (view.isOpen) view.close();
       else this.showCommands(win);
     };
     this.windows.set(win, { view, key, commands: entries });
-    registerLegacy();
     win.addEventListener("keydown", key, { capture: true });
   }
 
@@ -108,7 +109,6 @@ class CommandPalette {
       entry.view.destroy();
       this.windows.delete(owner);
     }
-    this.legacy.unregister(win);
   }
 }
 

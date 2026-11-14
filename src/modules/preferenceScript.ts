@@ -3,6 +3,13 @@ import { SplitViewFactory } from "./splitView";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
 import type { SplitTabsTitleMode } from "../utils/splitTabTitle";
+import {
+  DEFAULT_COMMAND_SHORTCUT,
+  formatShortcut,
+  setShortcutCaptureActive,
+} from "../ui/commandShortcut";
+
+let cancelCommandShortcutCapture: (() => void) | null = null;
 
 export function registerPreferencePane(): void {
   Zotero.PreferencePanes.register({
@@ -70,6 +77,7 @@ function updatePrefsUI() {
     doc,
     isSplitTabsTitleMode(mode) ? mode : "filename",
   );
+  syncCommandShortcut(doc);
 
   // Initialize color preview with current pref values
   updateColorPreview(doc);
@@ -78,6 +86,8 @@ function updatePrefsUI() {
 function bindPrefEvents() {
   if (!addon.data.prefs?.window) return;
   const doc = addon.data.prefs.window.document;
+
+  bindCommandShortcutEvents(doc);
 
   // Checkbox: Follow mouse focus to switch primary window
   const followFocusCheckbox = doc.querySelector(
@@ -129,6 +139,85 @@ function bindPrefEvents() {
   handleColorChange(rInput, "primaryScrollbarR");
   handleColorChange(gInput, "primaryScrollbarG");
   handleColorChange(bInput, "primaryScrollbarB");
+}
+
+function syncCommandShortcut(doc: Document) {
+  const value = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-value`,
+  );
+  if (value)
+    value.textContent =
+      getPref("commandPaletteShortcut") || DEFAULT_COMMAND_SHORTCUT;
+}
+
+function bindCommandShortcutEvents(doc: Document) {
+  const recordButton = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-record`,
+  ) as HTMLButtonElement | null;
+  const resetButton = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-reset`,
+  ) as HTMLButtonElement | null;
+  const description = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-shortcut-desc`,
+  );
+  if (!recordButton || !resetButton) return;
+
+  const stopCapture = () => {
+    cancelCommandShortcutCapture?.();
+    cancelCommandShortcutCapture = null;
+  };
+
+  recordButton.addEventListener("click", () => {
+    stopCapture();
+    recordButton.textContent = getString("pref-command-shortcut-recording");
+    if (description)
+      description.textContent = getString("pref-command-shortcut-desc");
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        stopCapture();
+        recordButton.textContent = getString("pref-command-shortcut-record");
+        return;
+      }
+
+      const shortcut = formatShortcut(event);
+      if (!shortcut) {
+        if (description)
+          description.textContent = getString(
+            "pref-command-shortcut-modifier-required",
+          );
+        return;
+      }
+
+      setPref("commandPaletteShortcut", shortcut);
+      syncCommandShortcut(doc);
+      stopCapture();
+      recordButton.textContent = getString("pref-command-shortcut-record");
+    };
+
+    const cancel = () => {
+      doc.removeEventListener("keydown", onKeyDown, true);
+      doc.defaultView?.removeEventListener("pagehide", cancel);
+      setShortcutCaptureActive(false);
+      if (cancelCommandShortcutCapture === cancel)
+        cancelCommandShortcutCapture = null;
+      if (description)
+        description.textContent = getString("pref-command-shortcut-desc");
+    };
+    cancelCommandShortcutCapture = cancel;
+    setShortcutCaptureActive(true);
+    doc.addEventListener("keydown", onKeyDown, true);
+    doc.defaultView?.addEventListener("pagehide", cancel, { once: true });
+  });
+
+  resetButton.addEventListener("click", () => {
+    stopCapture();
+    setPref("commandPaletteShortcut", DEFAULT_COMMAND_SHORTCUT);
+    syncCommandShortcut(doc);
+    recordButton.textContent = getString("pref-command-shortcut-record");
+  });
 }
 
 function updateColorPreview(doc: Document) {

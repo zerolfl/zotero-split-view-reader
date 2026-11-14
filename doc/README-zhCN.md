@@ -31,10 +31,12 @@
 
 ### 通过命令面板快速启动
 
-按 `Shift + P` 打开 Zotero 命令面板：
+按设置的快捷键（默认为 `Shift + P`）打开插件命令面板：
 
 - **在 Zotero 阅读器中打开**：在普通 Zotero Reader 标签页中打开单个 PDF。
 - **在分屏视图中打开**：选择两篇 PDF 并进入分屏阅读。
+
+可在 `编辑` → `设置` → `Split-View Reader` → `快捷键` 中修改绑定。
 
 <p align="center">
   <img src="command-example.png" width="650" alt="命令面板" />
