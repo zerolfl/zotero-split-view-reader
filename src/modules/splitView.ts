@@ -372,13 +372,6 @@ export class SplitViewFactory {
   );
   private static creation = new SplitViewCreationService({
     getDefaultPrimarySide: () => this.primaryView.getDefaultSide(),
-    getOriginalTitle: (tabID) => {
-      try {
-        return tabsForWindow(Zotero.getMainWindow()).lookup(tabID).tab?.title;
-      } catch {
-        return undefined;
-      }
-    },
     setState: (tabID, state) => this.stateStore.set(tabID, state),
     setupShell: (tabID, state, shell, win) => {
       this.layout.setupResizerDrag(
@@ -703,7 +696,6 @@ export class SplitViewFactory {
     const viewState =
       state.activeSide === "left" ? state.leftViewState : state.rightViewState;
 
-    const originalTitle = state.originalTitle;
     const originalReaderContainer = state.originalReaderContainer;
     state.isCleaningUp = true;
     for (const browser of [state.leftBrowser, state.rightBrowser]) {
@@ -726,13 +718,15 @@ export class SplitViewFactory {
       tabID,
       allowDuplicate: true,
       openInBackground: tabs.selectedID !== tabID,
+      primaryViewState: viewState,
+      window: win,
     });
     if (!reader) throw new Error("Native reader was not restored");
     await readerRuntime.waitForReaderReady(reader);
-    if (viewState) await readerView.applyViewStateToReader(reader, viewState);
 
     this.session.writeSavedState(state, itemID);
-    if (originalTitle) await tabs.rename(tabID, originalTitle);
+    const title = item && (await (item as any).getTabTitle());
+    await tabs.rename(tabID, title || undefined);
     if (item)
       splitContextPane.updateItem(tabID, win, item.parentItemID || item.id);
   }

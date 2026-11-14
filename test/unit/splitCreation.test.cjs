@@ -99,7 +99,6 @@ test("initializes different PDFs and persists the shared split setup", async () 
   assert.equal(state.rightItemID, 2);
   assert.equal(state.leftParentItemID, 11);
   assert.equal(state.rightParentItemID, 22);
-  assert.equal(state.originalTitle, "Reader");
   assert.strictEqual(state.leftViewState, leftViewState);
   assert.strictEqual(state.rightViewState, rightViewState);
   assert.ok(fixture.events.some(([name, same]) => name === "loaded" && !same));

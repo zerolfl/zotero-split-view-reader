@@ -4,7 +4,6 @@ import type { SplitTabState } from "./types";
 
 export interface SplitViewCreationDependencies {
   getDefaultPrimarySide(): "left" | "right" | null;
-  getOriginalTitle(tabID: string): string | undefined;
   setState(tabID: string, state: SplitTabState): void;
   setupShell(
     tabID: string,
@@ -86,7 +85,6 @@ export class SplitViewCreationService {
       leftViewState,
       rightViewState,
       isSamePDF,
-      originalTitle: this.deps.getOriginalTitle(tabID),
     });
     this.deps.setState(tabID, state);
 

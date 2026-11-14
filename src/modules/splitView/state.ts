@@ -17,7 +17,6 @@ export interface SplitTabStateOptions {
   leftViewState: any;
   rightViewState: any;
   eventListeners: TrackedEventListener[];
-  originalTitle?: string;
   isSamePDF: boolean;
 }
 

@@ -20,7 +20,6 @@ function options(overrides = {}) {
     leftViewState: { pageIndex: 3 },
     rightViewState: { pageIndex: 7 },
     eventListeners: [{ type: "click" }],
-    originalTitle: "Original title",
     isSamePDF: false,
     ...overrides,
   };

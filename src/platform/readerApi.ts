@@ -6,7 +6,11 @@ export class ReaderApiAdapter {
   open(
     itemID: number,
     location?: _ZoteroTypes.Reader.Location,
-    options?: _ZoteroTypes.Reader.OpenOptions,
+    options?: _ZoteroTypes.Reader.OpenOptions & {
+      primaryViewState?: any;
+      secondViewState?: _ZoteroTypes.Reader.SecondViewState;
+      window?: Window;
+    },
   ): Promise<void | _ZoteroTypes.ReaderInstance> {
     return Zotero.Reader.open(itemID, location, options);
   }

@@ -4,7 +4,7 @@ const { load } = require("./helpers.cjs");
 
 const { SplitViewShutdown } = load("src/modules/splitView/shutdown.ts");
 
-test("saves and cleans split tabs before unregistering shared services", () => {
+test("restores split tabs before clearing shared state", async () => {
   const events = [];
   const states = new Map([
     ["first", { tabID: "first" }],
@@ -23,10 +23,14 @@ test("saves and cleans split tabs before unregistering shared services", () => {
       events.push("save");
     },
     getTabIDs: () => states.keys(),
+    restoreTabForDisable: async (tabID) => {
+      events.push(`restore:${tabID}`);
+      if (tabID === "second") throw new Error("restore failed");
+      states.delete(tabID);
+    },
     cleanupTabResources: (tabID) => {
       events.push(`cleanup:${tabID}`);
       states.delete(tabID);
-      if (tabID === "second") throw new Error("cleanup failed");
     },
     clearStates: () => {
       events.push("clear");
@@ -42,17 +46,11 @@ test("saves and cleans split tabs before unregistering shared services", () => {
     debug: (message) => events.push(message),
   });
 
-  shutdown.unregisterAll();
+  await shutdown.unregisterAll();
 
   assert.deepEqual(events, [
     "selector",
     "reader-menu",
-    "save",
-    "cleanup:first",
-    "cleanup:second",
-    "Split view: unregisterAll - cleanupTabResources(second) failed: Error: cleanup failed",
-    "cleanup:third",
-    "clear",
     "session",
     "notifier",
     "scrollbar",
@@ -60,6 +58,12 @@ test("saves and cleans split tabs before unregistering shared services", () => {
     "read-aloud",
     "tab-hooks",
     "commands",
+    "restore:first",
+    "restore:second",
+    "Split view: unregisterAll - restoreTabForDisable(second) failed: Error: restore failed",
+    "cleanup:second",
+    "restore:third",
+    "clear",
   ]);
   assert.equal(states.size, 0);
 });

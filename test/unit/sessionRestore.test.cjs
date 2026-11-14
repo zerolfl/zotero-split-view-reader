@@ -29,12 +29,17 @@ function setup({
     hasState: () => existingState,
     itemExists: (id) => itemsByID.has(id),
     getItem: (id) => itemsByID.get(id) || null,
-    convertSamePDF: async (...args) => {
-      events.push(["same", ...args]);
-      onConvert();
-    },
-    convertDifferentPDF: async (...args) => {
-      events.push(["different", ...args]);
+    restoreSavedSplit: async (reader, savedData) => {
+      if (savedData.isSamePDF) {
+        events.push(["same", reader, savedData]);
+      } else {
+        events.push([
+          "different",
+          reader,
+          itemsByID.get(savedData.rightItemID),
+          savedData,
+        ]);
+      }
       onConvert();
     },
     getState: () => state,

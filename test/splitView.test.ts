@@ -847,6 +847,7 @@ describe("split reader integration", function () {
       assert.ok(nativeReader);
       await readerRuntime.waitForReaderReady(nativeReader);
       assert.equal(nativeReader.itemID, right.id);
+      assert.equal(nativeReader.getPrimaryViewState()?.pageIndex, 1);
 
       const tabs = Zotero.getMainWindow().Zotero_Tabs as any;
       const data = tabs._getTab(state.tabID).tab.data;
@@ -856,6 +857,10 @@ describe("split reader integration", function () {
       assert.equal(data.rightItemID, right.id);
       assert.equal(data.activeSide, "right");
       assert.equal(data.rightViewState.pageIndex, 1);
+      assert.equal(
+        tabs._getTab(state.tabID).tab.title,
+        await right.getTabTitle(),
+      );
       await waitFor(
         () =>
           nativeReader._tabContainer.querySelectorAll("browser").length === 1,

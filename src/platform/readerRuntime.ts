@@ -90,7 +90,11 @@ function isBrowserAlive(browser: XULBrowserElement): boolean {
 
 function unloadBrowser(browser: XULBrowserElement): void {
   try {
-    if (isBrowserAlive(browser)) {
+    if (
+      isBrowserAlive(browser) &&
+      browser.getAttribute("src") !== "about:blank"
+    ) {
+      (browser as any).destroy?.();
       browser.setAttribute("src", "about:blank");
     }
   } catch {

@@ -48,7 +48,6 @@ export interface SplitTabState {
   splitRatio: number;
   leftViewState: any;
   rightViewState: any;
-  originalTitle?: string;
   isCleaningUp: boolean;
   isSamePDF: boolean;
   disposeAnnotations?: () => void;

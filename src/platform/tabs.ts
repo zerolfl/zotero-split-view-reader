@@ -65,7 +65,7 @@ class Tabs {
     this.tabs.select(id);
   }
 
-  rename(id: string, title: string): Promise<void> {
+  rename(id: string, title?: string): Promise<void> {
     return this.tabs.rename(id, title);
   }
 
