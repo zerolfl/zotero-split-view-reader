@@ -161,6 +161,6 @@ describe("command palette shortcut integration", function () {
     const lists = [...prompt.promptNode.children];
     shortcut();
     assert.deepEqual([...prompt.promptNode.children], lists);
-    assert.lengthOf(prompt.commands, 2);
+    assert.lengthOf(prompt.commands, 3);
   });
 });
