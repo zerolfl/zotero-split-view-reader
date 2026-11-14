@@ -13,11 +13,14 @@ if (
   throw new Error("Unexpected test directory");
 
 const ctx = await Config.loadConfig({
-  server: { devtools: false, startArgs: ["-headless"] },
+  server: { devtools: false, startArgs: ["-no-remote", "-headless"] },
   test: {
     headless: false,
     watch: false,
-    prefs: { "app.update.auto": false },
+    prefs: {
+      "app.update.auto": false,
+      "network.security.ports.banned.override": "10080",
+    },
     hooks: {
       "test:prebuild": async (context) => {
         const path = resolve(context.dist, "addon/manifest.json");

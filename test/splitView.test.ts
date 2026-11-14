@@ -41,7 +41,7 @@ describe("split reader integration", function () {
   afterEach(async function () {
     Zotero.logError = logError;
     for (const tabID of [...factory.stateStore.keys()])
-      factory.cleanupTab(tabID);
+      factory.tabCleanup.cleanupAndSave(tabID);
     const tabs = Zotero.getMainWindow().Zotero_Tabs;
     for (const tab of [...(tabs as any)._tabs]) {
       if (tab.type.startsWith("reader")) tabs.close(tab.id);
@@ -50,10 +50,7 @@ describe("split reader integration", function () {
   });
 
   after(function () {
-    if (factory.globalTabNotifierID) {
-      Zotero.Notifier.unregisterObserver(factory.globalTabNotifierID);
-      factory.globalTabNotifierID = null;
-    }
+    factory.tabNotifier.unregister();
     for (const [name, descriptor] of Object.entries(globals)) {
       if (descriptor) Object.defineProperty(window, name, descriptor);
       else delete (window as any)[name];
@@ -218,7 +215,7 @@ describe("split reader integration", function () {
     );
     assert.equal(saved.leftViewState.pageIndex, 1, "saved left position");
     assert.equal(saved.rightViewState.pageIndex, 0, "saved right position");
-    factory.cleanupTab(state.tabID);
+    factory.tabCleanup.cleanupAndSave(state.tabID);
     tabs.close(state.tabID);
     const ordinary = await Zotero.Reader.open(left.id);
     await readerRuntime.waitForReaderReady(ordinary);
@@ -347,7 +344,7 @@ describe("split reader integration", function () {
       readerView.getCurrentViewStateFromBrowser(state.rightBrowser).pageIndex,
       0,
     );
-    await factory.swapPDFs(state.tabID);
+    await factory.pdfSwap.swap(state.tabID);
 
     assert.equal(state.leftItemID, right.id);
     assert.equal(state.rightItemID, left.id);
@@ -396,7 +393,7 @@ describe("split reader integration", function () {
       "visible right reader position before closing",
     );
 
-    await factory.revertToSingleReader(state.tabID, "left");
+    await factory.lifecycle.revertToSingleReader(state.tabID, "left");
 
     assert.isUndefined(factory.stateStore.get(state.tabID));
     const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
@@ -437,7 +434,7 @@ describe("split reader integration", function () {
       scale: 125,
     });
 
-    await factory.revertToSingleReader(state.tabID, "left");
+    await factory.lifecycle.revertToSingleReader(state.tabID, "left");
 
     assert.isUndefined(factory.stateStore.get(state.tabID));
     const tabs = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs;
@@ -464,7 +461,7 @@ describe("split reader integration", function () {
     const originalSelect = selector.select;
     try {
       selector.select = async () => left;
-      await factory.selectAndLoadPDF(state.tabID, "right");
+      await factory.pdfReplacement.selectAndLoad(state.tabID, "right");
     } finally {
       selector.select = originalSelect;
     }
@@ -513,7 +510,7 @@ describe("split reader integration", function () {
       scale: 100,
     });
 
-    await factory.separateViews(state.tabID, "right");
+    await factory.lifecycle.separate(state.tabID, "right");
 
     assert.isUndefined(factory.stateStore.get(state.tabID));
     assert.strictEqual(
@@ -565,7 +562,7 @@ describe("split reader integration", function () {
       "visible right reader scale before separating",
     );
 
-    await factory.separateViews(state.tabID, "right");
+    await factory.lifecycle.separate(state.tabID, "right");
 
     assert.isUndefined(factory.stateStore.get(state.tabID));
     const readers = (Zotero.getMainWindow().Zotero_Tabs as any)._tabs.filter(
@@ -585,7 +582,7 @@ describe("split reader integration", function () {
 
   it("rebinds annotation and selection sync after replacing readers for a swap", async function () {
     const state = await open(true);
-    await factory.swapPDFs(state.tabID);
+    await factory.pdfSwap.swap(state.tabID);
     const note = addNote(state, "right");
     const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);
     const second = readerRuntime.getInternalReaderFromBrowser(
