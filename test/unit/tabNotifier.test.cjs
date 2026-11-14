@@ -165,3 +165,30 @@ test("unregister is idempotent and clears its ID after an API failure", () => {
     2,
   );
 });
+
+test("closing the same PDF saves only the active pane once", async () => {
+  for (const activeSide of ["left", "right"]) {
+    const current = state({ rightItemID: 10, isSamePDF: true, activeSide });
+    const fixture = setup({ states: new Map([["split", current]]) });
+    fixture.notifier.ensureRegistered(fixture.win);
+    fixture.callback().notify("close", "tab", ["split"], {});
+    await Promise.resolve();
+    assert.deepEqual(
+      fixture.events.filter(([name]) => name === "save"),
+      [["save", 10, current[`${activeSide}Browser`].view]],
+    );
+  }
+});
+
+test("shutdown saves one active fallback for the same attachment", async () => {
+  for (const activeSide of ["left", "right"]) {
+    const current = state({ rightItemID: 10, isSamePDF: true, activeSide });
+    const fixture = setup({ capture: () => null });
+    fixture.notifier.saveAll([current]);
+    await Promise.resolve();
+    assert.deepEqual(
+      fixture.events.filter(([name]) => name === "save"),
+      [["save", 10, current[`${activeSide}ViewState`]]],
+    );
+  }
+});

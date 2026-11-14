@@ -98,10 +98,23 @@ export class SplitTabNotifier {
       // Browser may be dead.
     }
     try {
-      void Promise.all([
-        this.deps.saveViewState(leftItemID, leftViewState || leftFallback),
-        this.deps.saveViewState(rightItemID, rightViewState || rightFallback),
-      ]).catch(() => {
+      const entries: [number, any][] =
+        leftItemID === rightItemID
+          ? [
+              [
+                leftItemID,
+                state.activeSide === "right"
+                  ? rightViewState || rightFallback
+                  : leftViewState || leftFallback,
+              ],
+            ]
+          : [
+              [leftItemID, leftViewState || leftFallback],
+              [rightItemID, rightViewState || rightFallback],
+            ];
+      void Promise.all(
+        entries.map(([itemID, view]) => this.deps.saveViewState(itemID, view)),
+      ).catch(() => {
         // Ignore save errors while tabs or the application are closing.
       });
     } catch {
