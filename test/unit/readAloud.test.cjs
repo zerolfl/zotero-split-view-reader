@@ -234,7 +234,9 @@ test("invalid timestamp headers still return cached audio and report the error",
   api.getReadAloudAudio = async () => assert.fail("audio should be cached");
   entries.set(
     "https://read-aloud.zotero.invalid/audio?voice=voice&text=text&cacheVersion=2&timestamps=1",
-    new Response("audio", { headers: { "X-Zotero-Timestamps": "invalid" } }),
+    new globalThis.Response("audio", {
+      headers: { "X-Zotero-Timestamps": "invalid" },
+    }),
   );
   const remote = platform.getReadAloudRemoteInterface(targetWindow);
   const result = await remote.getAudio(

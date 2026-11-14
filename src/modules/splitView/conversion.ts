@@ -114,6 +114,7 @@ export class SplitViewConversionService {
         throw new AggregateError(
           [error, recoveryError],
           "Split view reader recovery failed",
+          { cause: recoveryError },
         );
       }
       throw error;
