@@ -12,7 +12,7 @@ test("restores split tabs before clearing shared state", async () => {
     ["third", { tabID: "third" }],
   ]);
   const shutdown = new SplitViewShutdown({
-    disposePDFSelector: () => events.push("selector"),
+    disposeAttachmentSelector: () => events.push("selector"),
     unregisterReaderContextMenu: () => events.push("reader-menu"),
     getStates: () => states.values(),
     saveAll: (values) => {
@@ -88,7 +88,7 @@ test("window unload saves and cleans only its tabs and retains shared services",
     },
     unregisterTabLookup: (win) => events.push(["hooks", win]),
     unregisterCommandPalette: (win) => events.push(["palette", win]),
-    disposePDFSelector: shared,
+    disposeAttachmentSelector: shared,
     unregisterReaderContextMenu: shared,
     getTabIDs: shared,
     clearStates: shared,

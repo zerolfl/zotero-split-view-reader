@@ -31,7 +31,7 @@
 
 ### 通过命令面板快速启动
 
-按 `Shift + P` 打开 Zotero 命令面板，选择 **分屏阅读器** 即可进入分屏模式。
+按 `Shift + P` 打开 Zotero 命令面板：选择 **在分屏视图中打开** 可进入分屏模式，选择 **在阅读器中打开** 可单独打开附件。
 
 <p align="center">
   <img src="command-example.png" width="650" alt="命令面板" />

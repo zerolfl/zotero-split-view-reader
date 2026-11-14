@@ -1,7 +1,7 @@
 import type { SplitTabState } from "./types";
 
 export interface SplitViewShutdownDependencies {
-  disposePDFSelector(): void;
+  disposeAttachmentSelector(): void;
   unregisterReaderContextMenu(): void;
   getStates(): Iterable<SplitTabState>;
   saveAll(states: Iterable<SplitTabState>): void;
@@ -41,7 +41,7 @@ export class SplitViewShutdown {
   }
 
   async unregisterAll(): Promise<void> {
-    this.deps.disposePDFSelector();
+    this.deps.disposeAttachmentSelector();
     this.deps.unregisterReaderContextMenu();
     this.deps.unregisterSession();
     this.deps.unregisterTabNotifier();

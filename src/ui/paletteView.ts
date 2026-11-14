@@ -1,15 +1,15 @@
 import { config } from "../../package.json";
 import type {
-  PDFSelectionHandlers,
-  PDFSelectionRow,
-} from "../modules/pdfSelector/types";
+  AttachmentSelectionHandlers,
+  AttachmentSelectionRow,
+} from "../modules/attachmentSelector/types";
 
 export class PaletteView {
   private root: HTMLDivElement;
   private input: HTMLInputElement;
   private list: HTMLDivElement;
-  private handlers: PDFSelectionHandlers | null = null;
-  private rows: PDFSelectionRow[] = [];
+  private handlers: AttachmentSelectionHandlers | null = null;
+  private rows: AttachmentSelectionRow[] = [];
   private selected = 0;
   private previousFocus: Element | null = null;
 
@@ -67,7 +67,7 @@ export class PaletteView {
     return !this.root.hidden;
   }
 
-  open(placeholder: string, handlers: PDFSelectionHandlers): void {
+  open(placeholder: string, handlers: AttachmentSelectionHandlers): void {
     if (!this.isOpen) this.previousFocus = this.win.document.activeElement;
     this.handlers = handlers;
     this.root.hidden = false;
@@ -83,7 +83,7 @@ export class PaletteView {
     this.input.focus();
   }
 
-  render(rows: PDFSelectionRow[], emptyMessage: string): void {
+  render(rows: AttachmentSelectionRow[], emptyMessage: string): void {
     this.rows = rows;
     this.selected = 0;
     this.list.replaceChildren();

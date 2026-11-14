@@ -18,7 +18,7 @@ import { readerApi } from "../platform/readerApi";
 import { itemApi } from "../platform/itemApi";
 import { contextPane as splitContextPane } from "../platform/contextPane";
 import { commandPalette } from "../ui/commandPalette";
-import { PDFSelector } from "./pdfSelector";
+import { AttachmentSelector } from "./attachmentSelector";
 import type { SplitTabState } from "./splitView/types";
 import { SplitReadAloudService } from "./splitView/readAloud";
 import { SplitReadAloudCoordinator } from "./splitView/readAloudCoordinator";
@@ -45,6 +45,11 @@ import { SplitTabResourceTracker } from "./splitView/resourceTracker";
 import { SplitTabStateStore } from "./splitView/stateStore";
 import { SplitViewContextPane } from "./splitView/contextPane";
 import { SplitReaderEntryFlow } from "./splitView/readerEntryFlow";
+import {
+  AttachmentReaderFlow,
+  findExistingReaderTabID,
+  needsSeparateReaderTab,
+} from "./splitView/attachmentReaderFlow";
 import { SplitTabNotifier } from "./splitView/tabNotifier";
 import { SplitPrimaryView } from "./splitView/primaryView";
 import { SplitScrollbar } from "./splitView/scrollbar";
@@ -491,7 +496,7 @@ export class SplitViewFactory {
   private static pdfReplacement = new PDFReplacementService({
     getState: (tabID) => this.stateStore.get(tabID) || null,
     getItem: (itemID) => itemApi.get(itemID) || undefined,
-    selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
+    selectPDF: (libraryID) => this.attachmentSelector.select(libraryID),
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
     getMainWindow: () => Zotero.getMainWindow(),
@@ -534,10 +539,10 @@ export class SplitViewFactory {
     writeSession: (tabID) => this.session.writeTab(tabID),
     debug: (message) => Zotero.debug(message),
   });
-  private static pdfSelector = new PDFSelector();
+  private static attachmentSelector = new AttachmentSelector();
   private static libraryFlow = new SplitLibraryFlow({
     selectPDF: (step, libraryID) =>
-      this.pdfSelector.select(
+      this.attachmentSelector.select(
         libraryID,
         getString(
           step === "first"
@@ -562,7 +567,7 @@ export class SplitViewFactory {
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
     getItem: (itemID) => itemApi.get(itemID) || null,
-    selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
+    selectPDF: (libraryID) => this.attachmentSelector.select(libraryID),
     convertSamePDF: (reader) => this.conversion.convertSamePDF(reader),
     convertDifferentPDF: (reader, item) =>
       this.conversion.convertDifferentPDF(reader, item),
@@ -575,8 +580,32 @@ export class SplitViewFactory {
     openReader: (reader) => this.readerEntryFlow.open(reader),
     openLibrary: () => this.libraryFlow.open(),
   });
+  private static attachmentReaderFlow = new AttachmentReaderFlow({
+    selectAttachment: () =>
+      this.attachmentSelector.select(
+        undefined,
+        getString("splitview-select-reader-attachment"),
+        "reader",
+      ),
+    openReader: (itemID) => {
+      const tabService = tabsForWindowIfAvailable(Zotero.getMainWindow());
+      const tabs = tabService?.list() || [];
+      const existingReaderTabID = findExistingReaderTabID(itemID, tabs);
+      if (existingReaderTabID) {
+        tabService?.select(existingReaderTabID);
+        return Promise.resolve();
+      }
+      return readerApi.open(
+        itemID,
+        undefined,
+        needsSeparateReaderTab(itemID, tabs)
+          ? { allowDuplicate: true }
+          : undefined,
+      );
+    },
+  });
   private static shutdown = new SplitViewShutdown({
-    disposePDFSelector: () => this.pdfSelector.dispose(),
+    disposeAttachmentSelector: () => this.attachmentSelector.dispose(),
     unregisterReaderContextMenu: () => this.readerContextMenu.unregister(),
     getStates: () => this.stateStore.values(),
     saveAll: (states) => this.tabNotifier.saveAll(states),
@@ -619,7 +648,22 @@ export class SplitViewFactory {
       this.tabTitles.registerPreferenceObserver(name),
     registerReadAloud: () => this.readAloud.register(),
     registerCommandPalette: (win) =>
-      commandPalette.register(win, () => this.commandEntry.execute(win)),
+      commandPalette.register(win, [
+        {
+          id: "split-view-reader",
+          name: getString("splitview-command-open-split-view"),
+          description: getString(
+            "splitview-command-open-split-view-description",
+          ),
+          run: () => this.commandEntry.execute(win),
+        },
+        {
+          id: "open-attachment-in-reader",
+          name: getString("splitview-command-open-reader"),
+          description: getString("splitview-command-open-reader-description"),
+          run: () => this.attachmentReaderFlow.open(),
+        },
+      ]),
     unregisterAll: () => this.shutdown.unregisterAll(),
   });
   static refreshOpenSplitViewTabTitles(): void {

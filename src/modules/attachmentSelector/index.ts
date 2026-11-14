@@ -2,18 +2,27 @@ import { commandPalette } from "../../ui/commandPalette";
 import { getString } from "../../utils/locale";
 import {
   getItemDescription,
-  getPDFAttachments,
+  getSelectableAttachments,
   searchPDFItems,
+  searchReaderItems,
 } from "./search";
-import type { PDFSelectionRow, PDFSelectionView } from "./types";
+import type { AttachmentSelectionRow, AttachmentSelectionView } from "./types";
+import type { AttachmentSelectionMode } from "./search";
 
-export class PDFSelector {
+export class AttachmentSelector {
   private cancel: (() => void) | null = null;
 
   constructor(
-    private readonly createView: () => PDFSelectionView = () =>
+    private readonly createView: () => AttachmentSelectionView = () =>
       commandPalette.createSelectionView(),
-    private readonly search: typeof searchPDFItems = searchPDFItems,
+    private readonly search: (
+      text: string,
+      libraryID: number | undefined,
+      mode: AttachmentSelectionMode,
+    ) => Promise<Zotero.Item[]> = (text, libraryID, mode) =>
+      mode === "pdf"
+        ? searchPDFItems(text, libraryID)
+        : searchReaderItems(text, libraryID),
   ) {}
 
   dispose(): void {
@@ -24,6 +33,7 @@ export class PDFSelector {
   select(
     libraryID?: number,
     placeholder?: string,
+    mode: AttachmentSelectionMode = "pdf",
   ): Promise<Zotero.Item | null> {
     this.dispose();
     const view = this.createView();
@@ -57,7 +67,7 @@ export class PDFSelector {
 
       const choose = (item: Zotero.Item) => {
         if (closed) return;
-        const attachments = getPDFAttachments(item);
+        const attachments = getSelectableAttachments(item, mode);
         if (attachments.length === 1) {
           finish(attachments[0]);
         } else {
@@ -67,13 +77,26 @@ export class PDFSelector {
         }
       };
 
-      const itemRows = (items: Zotero.Item[]): PDFSelectionRow[] =>
+      const itemRows = (items: Zotero.Item[]): AttachmentSelectionRow[] =>
         items.map((item) => {
-          const count = getPDFAttachments(item).length;
+          if (item.isFileAttachment()) {
+            return {
+              title: String(
+                item.getField("title") || item.attachmentFilename || "File",
+              ),
+              description: item.parentItem
+                ? String(item.parentItem.getField("title") || "")
+                : "",
+              select: () => finish(item),
+            };
+          }
+          const count = getSelectableAttachments(item, mode).length;
           return {
             title:
               String(item.getField("title") || "Untitled") +
-              (count > 1 ? ` [${count} PDFs]` : ""),
+              (count > 1
+                ? ` [${count} ${mode === "pdf" ? "PDFs" : "attachments"}]`
+                : ""),
             description: getItemDescription(item),
             select: () => choose(item),
           };
@@ -82,12 +105,12 @@ export class PDFSelector {
       const attachmentRows = (
         item: Zotero.Item,
         text: string,
-      ): PDFSelectionRow[] =>
-        getPDFAttachments(item).flatMap((attachment) => {
+      ): AttachmentSelectionRow[] =>
+        getSelectableAttachments(item, mode).flatMap((attachment) => {
           const title = String(
             attachment.getField("title") ||
               attachment.attachmentFilename ||
-              "PDF",
+              "Attachment",
           );
           if (!title.toLowerCase().includes(text.trim().toLowerCase()))
             return [];
@@ -108,7 +131,7 @@ export class PDFSelector {
           const selectedParent = parent;
           const items = selectedParent
             ? null
-            : await this.search(text, libraryID);
+            : await this.search(text, libraryID, mode);
           if (closed || revision !== current) return;
           const rows = selectedParent
             ? attachmentRows(selectedParent, text)
@@ -117,8 +140,12 @@ export class PDFSelector {
             rows,
             getString(
               !selectedParent && !text.trim()
-                ? "splitview-no-open-pdf"
-                : "splitview-not-found",
+                ? mode === "pdf"
+                  ? "splitview-no-open-pdf"
+                  : "splitview-no-open-attachment"
+                : mode === "pdf"
+                  ? "splitview-not-found"
+                  : "splitview-attachment-not-found",
             ),
           );
         };

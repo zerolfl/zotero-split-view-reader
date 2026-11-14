@@ -1,29 +1,40 @@
-import type { PDFSelectionView } from "../modules/pdfSelector/types";
-import { LegacyCommands } from "../platform/legacyCommands";
+import type { AttachmentSelectionView } from "../modules/attachmentSelector/types";
+import {
+  LegacyCommands,
+  type PaletteCommandRegistration,
+} from "../platform/legacyCommands";
 import { getString } from "../utils/locale";
 import { PaletteView } from "./paletteView";
 
 class CommandPalette {
   private windows = new Map<
     Window,
-    { view: PaletteView; key: (event: KeyboardEvent) => void; run: () => void }
+    {
+      view: PaletteView;
+      key: (event: KeyboardEvent) => void;
+      commands: PaletteCommandRegistration[];
+    }
   >();
   private legacy = new LegacyCommands();
 
-  register(win: Window, command: () => Promise<void>): void {
+  register(
+    win: Window,
+    commands: PaletteCommandRegistration[] | (() => Promise<void>),
+  ): void {
     if (this.windows.has(win)) return;
     const view = new PaletteView(win);
-    const run = () => {
-      view.hide();
-      void command().catch((error) => Zotero.logError(error));
-    };
-    const registerLegacy = () =>
-      this.legacy.register(
-        win,
-        "split-view-reader",
-        getString("splitview-command-label"),
-        run,
-      );
+    const entries =
+      typeof commands === "function"
+        ? [
+            {
+              id: "split-view-reader",
+              name: getString("splitview-command-label"),
+              description: getString("splitview-command-label"),
+              run: commands,
+            },
+          ]
+        : commands;
+    const registerLegacy = () => this.legacy.register(win, entries);
     const key = (event: KeyboardEvent) => {
       if (event.repeat || event.altKey || event.key.toLowerCase() !== "p")
         return;
@@ -43,7 +54,7 @@ class CommandPalette {
       if (view.isOpen) view.close();
       else this.showCommands(win);
     };
-    this.windows.set(win, { view, key, run });
+    this.windows.set(win, { view, key, commands: entries });
     registerLegacy();
     win.addEventListener("keydown", key, { capture: true });
   }
@@ -51,21 +62,23 @@ class CommandPalette {
   private showCommands(win: Window): void {
     const entry = this.windows.get(win);
     if (!entry) return;
-    const name = getString("splitview-command-label");
     const render = (text: string) =>
       entry.view.render(
-        name.toLowerCase().includes(text.trim().toLowerCase())
-          ? [
-              {
-                title: name,
-                description: "Split-View Reader",
-                select: entry.run,
-              },
-            ]
-          : [],
+        entry.commands
+          .filter(({ name }) =>
+            name.toLowerCase().includes(text.trim().toLowerCase()),
+          )
+          .map(({ name, description, run }) => ({
+            title: name,
+            description,
+            select: () => {
+              entry.view.hide();
+              void run().catch((error) => Zotero.logError(error));
+            },
+          })),
         getString("splitview-not-found"),
       );
-    entry.view.open(name, {
+    entry.view.open(getString("splitview-command-placeholder"), {
       input: render,
       back: () => entry.view.hide(),
       close: () => {},
@@ -73,7 +86,7 @@ class CommandPalette {
     render("");
   }
 
-  createSelectionView(): PDFSelectionView {
+  createSelectionView(): AttachmentSelectionView {
     const win = Zotero.getMainWindow();
     const entry = this.windows.get(win);
     if (!entry) throw new Error("Split-view command palette is unavailable");

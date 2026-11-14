@@ -16,7 +16,12 @@ function deferred() {
 }
 
 function item(id, attachments = []) {
-  return { id, attachments, getField: () => `Item ${id}` };
+  return {
+    id,
+    attachments,
+    isFileAttachment: () => false,
+    getField: () => `Item ${id}`,
+  };
 }
 
 function selectorRuntime(search) {
@@ -24,8 +29,8 @@ function selectorRuntime(search) {
   const timers = new Map();
   const errors = [];
   let timerID = 0;
-  const { PDFSelector } = load(
-    "src/modules/pdfSelector/index.ts",
+  const { AttachmentSelector } = load(
+    "src/modules/attachmentSelector/index.ts",
     {
       Zotero: { logError: (error) => errors.push(error) },
       setTimeout: (callback) => {
@@ -41,12 +46,13 @@ function selectorRuntime(search) {
       "../../utils/locale": { getString: (key) => key },
       "./search": {
         getItemDescription: () => "description",
-        getPDFAttachments: (value) => value.attachments,
+        getSelectableAttachments: (value) => value.attachments,
         searchPDFItems: search,
+        searchReaderItems: search,
       },
     },
   );
-  const selector = new PDFSelector(() => {
+  const selector = new AttachmentSelector(() => {
     const view = {
       rows: [],
       renders: 0,
@@ -103,6 +109,27 @@ test("an older search cannot replace newer results or cancel on stale failure", 
     runtime.selector.dispose();
     assert.equal(await selected, null);
   }
+});
+
+test("reader mode shares the selector and reports supported attachment counts", async () => {
+  let searchArgs;
+  const parent = item(3, [item(31), item(32), item(33)]);
+  const runtime = selectorRuntime(async (...args) => {
+    searchArgs = args;
+    return [parent];
+  });
+  const selected = runtime.selector.select(
+    undefined,
+    "Type to search or Esc to exit",
+    "reader",
+  );
+  await flush();
+  assert.equal(searchArgs[2], "reader");
+  assert.equal(runtime.views[0].rows[0].title, "Item 3 [3 attachments]");
+  runtime.views[0].rows[0].select();
+  await flush();
+  runtime.views[0].rows[0].select();
+  assert.equal((await selected).id, 31);
 });
 
 test("cancelling a selection clears debounce and prevents late rendering", async () => {

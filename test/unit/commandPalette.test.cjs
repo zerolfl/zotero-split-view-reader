@@ -89,6 +89,34 @@ test("Shift+P opens commands, filters, starts once and releases the window", asy
   assert.equal(shortcut().defaultPrevented, false);
 });
 
+test("command palette routes split and ordinary reader actions separately", () => {
+  const { commandPalette, views, win, shortcut } = runtime();
+  const calls = [];
+  commandPalette.register(win, [
+    {
+      id: "split-view-reader",
+      name: "Open in Split View",
+      description: "Split-View Reader",
+      run: async () => calls.push("split"),
+    },
+    {
+      id: "open-attachment-in-reader",
+      name: "Open in Reader",
+      description: "Zotero Reader",
+      run: async () => calls.push("reader"),
+    },
+  ]);
+  shortcut();
+  assert.equal(views[0].rows.length, 2);
+  views[0].handlers.input("reader");
+  assert.deepEqual(
+    views[0].rows.map((row) => row.title),
+    ["Open in Reader"],
+  );
+  views[0].rows[0].select();
+  assert.deepEqual(calls, ["reader"]);
+});
+
 test("editable targets and modified shortcuts stay with the host", () => {
   const { commandPalette, views, win, shortcut } = runtime();
   commandPalette.register(win, async () => {});
@@ -140,9 +168,24 @@ function legacyPrompt(win, containers = 0) {
 test("legacy palette renders a late command without method hooks or duplicate shortcuts", () => {
   const { commandPalette, views, win, Zotero, shortcut } = runtime();
   let runs = 0;
-  commandPalette.register(win, async () => {
-    runs++;
-  });
+  commandPalette.register(win, [
+    {
+      id: "split-view-reader",
+      name: "Open in Split View",
+      description: "Split-View Reader",
+      run: async () => {
+        runs++;
+      },
+    },
+    {
+      id: "open-attachment-in-reader",
+      name: "Open in Reader",
+      description: "Zotero Reader",
+      run: async () => {
+        runs += 10;
+      },
+    },
+  ]);
   const prompt = legacyPrompt(win);
   const other = prompt.commands[0];
   const originalExit = prompt.exit;
@@ -151,10 +194,12 @@ test("legacy palette renders a late command without method hooks or duplicate sh
   assert.equal(shortcut().defaultPrevented, false);
   assert.ok(!views[0].isOpen);
   shortcut();
-  assert.equal(prompt.commands.length, 2);
+  assert.equal(prompt.commands.length, 3);
   assert.deepEqual(prompt.rendered, prompt.commands);
   prompt.commands[1].callback();
   assert.equal(runs, 1);
+  prompt.commands[2].callback();
+  assert.equal(runs, 11);
   assert.equal(prompt.promptNode.style.display, "none");
   commandPalette.unregister();
   assert.deepEqual(prompt.commands, [other]);
@@ -179,9 +224,22 @@ test("registration refreshes an existing root list but preserves nested workflow
     const { commandPalette, win, Zotero } = runtime();
     const prompt = legacyPrompt(win, containers);
     Zotero._toolkitGlobal = { prompt: { instance: prompt } };
-    commandPalette.register(win, async () => {});
-    assert.equal(prompt.commands.length, 2);
-    assert.equal(prompt.rendered.length, containers === 1 ? 2 : 0);
+    commandPalette.register(win, [
+      {
+        id: "split-view-reader",
+        name: "Open in Split View",
+        description: "Split-View Reader",
+        run: async () => {},
+      },
+      {
+        id: "open-attachment-in-reader",
+        name: "Open in Reader",
+        description: "Zotero Reader",
+        run: async () => {},
+      },
+    ]);
+    assert.equal(prompt.commands.length, 3);
+    assert.equal(prompt.rendered.length, containers === 1 ? 3 : 0);
     commandPalette.unregister();
   }
 });

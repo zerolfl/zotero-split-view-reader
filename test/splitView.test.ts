@@ -1105,7 +1105,7 @@ describe("split reader integration", function () {
     const state = await open(false);
     const originalLeftBrowser = state.leftBrowser;
     const originalRightBrowser = state.rightBrowser;
-    const selector = factory.pdfSelector;
+    const selector = factory.attachmentSelector;
     const originalSelect = selector.select;
     try {
       selector.select = async () => left;

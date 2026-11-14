@@ -49,9 +49,13 @@ describe("command palette shortcut integration", function () {
     win.Zotero_Tabs.select("zotero-pane");
     assert.isTrue(shortcut().defaultPrevented);
     assert.isFalse(root.hidden);
-    const option = root.querySelector('[role="option"]') as HTMLElement;
-    assert.ok(option);
-    assert.include(option.textContent, text("splitview-command-label"));
+    const options = root.querySelectorAll('[role="option"]');
+    assert.lengthOf(options, 2);
+    const option = options[0] as HTMLElement;
+    assert.include(
+      option.textContent,
+      text("splitview-command-open-split-view"),
+    );
     assert.isAbove(option.getBoundingClientRect().height, 0);
     assert.notEqual(win.getComputedStyle(option).display, "none");
     input.dispatchEvent(
@@ -116,9 +120,12 @@ describe("command palette shortcut integration", function () {
       assert.isTrue(root.hidden);
       assert.equal(prompt.promptNode.style.display, "flex");
       const rows = prompt.promptNode.querySelectorAll(".command");
-      assert.lengthOf(rows, 2);
+      assert.lengthOf(rows, 3);
       assert.equal(rows[0].textContent, "Other command");
-      assert.include(rows[1].textContent, text("splitview-command-label"));
+      assert.include(
+        rows[1].textContent,
+        text("splitview-command-open-split-view"),
+      );
       (rows[1] as HTMLElement).click();
       assert.equal(prompt.promptNode.style.display, "none");
       assert.isFalse(root.hidden);
@@ -130,7 +137,7 @@ describe("command palette shortcut integration", function () {
     const prompt = sharedPrompt(0, true);
     assert.isFalse(shortcut(true).defaultPrevented);
     assert.isTrue(root.hidden);
-    assert.lengthOf(prompt.promptNode.querySelectorAll(".command"), 2);
+    assert.lengthOf(prompt.promptNode.querySelectorAll(".command"), 3);
   });
 
   it("preserves an active nested shared workflow", function () {
