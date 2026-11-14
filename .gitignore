@@ -17,4 +17,7 @@ tsconfig.tsbuildinfo
 build
 logs
 
+# Local development notes
+/doc_local/
+
 AGENTS.md
