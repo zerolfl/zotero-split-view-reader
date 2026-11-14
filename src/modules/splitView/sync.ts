@@ -1,6 +1,7 @@
 import type { SplitSide, SplitTabState } from "./types";
 import { readerView } from "../../platform/readerView";
 import { readerRuntime } from "../../platform/readerRuntime";
+import { findReaderZoomButton } from "../../platform/readerToolbar";
 
 type ZoomDirection = "in" | "out" | "reset";
 
@@ -277,100 +278,9 @@ export class SplitSync {
     if (!state) return;
 
     try {
-      const contentWindow = browser.contentWindow;
-      if (!contentWindow) return;
-      const wrappedWindow =
-        (contentWindow as any).wrappedJSObject || contentWindow;
-      const doc = wrappedWindow.document;
-      if (!doc) return;
-
-      const findButton = (direction: ZoomDirection): Element | null => {
-        const selectors =
-          direction === "in"
-            ? [
-                '[data-l10n-id="pdfjs-zoom-in-button"]',
-                "#zoomIn",
-                ".zoomIn",
-                'button[class*="zoomIn"]',
-                'button[class*="zoom-in"]',
-                '[title*="Zoom In"]',
-                '[title*="zoom in"]',
-                '[aria-label*="Zoom In"]',
-                '[aria-label*="zoom in"]',
-                'button[data-tabstop="1"][class*="zoom"]',
-              ]
-            : direction === "out"
-              ? [
-                  '[data-l10n-id="pdfjs-zoom-out-button"]',
-                  "#zoomOut",
-                  ".zoomOut",
-                  'button[class*="zoomOut"]',
-                  'button[class*="zoom-out"]',
-                  '[title*="Zoom Out"]',
-                  '[title*="zoom out"]',
-                  '[aria-label*="Zoom Out"]',
-                  '[aria-label*="zoom out"]',
-                ]
-              : [
-                  "#zoomAuto",
-                  ".zoomAuto",
-                  'button[class*="zoomAuto"]',
-                  'button[class*="zoom-auto"]',
-                  '[title*="Zoom Reset"]',
-                  '[title*="zoom reset"]',
-                  '[title*="Reset Zoom"]',
-                  '[title*="reset zoom"]',
-                  '[aria-label*="Zoom Reset"]',
-                  '[aria-label*="Reset Zoom"]',
-                ];
-        for (const selector of selectors) {
-          try {
-            const button = doc.querySelector(selector);
-            if (button) return button;
-          } catch {
-            // Skip selectors unsupported by the embedded document.
-          }
-        }
-
-        for (const button of doc.querySelectorAll('button, [role="button"]')) {
-          const className = (button.className || "").toLowerCase();
-          const title = (button.getAttribute("title") || "").toLowerCase();
-          const label = (button.getAttribute("aria-label") || "").toLowerCase();
-          const values = `${className} ${title} ${label}`;
-          if (
-            direction === "in" &&
-            ["zoomin", "zoom-in", "zoom in", "放大"].some((value) =>
-              values.includes(value),
-            )
-          )
-            return button;
-          if (
-            direction === "out" &&
-            ["zoomout", "zoom-out", "zoom out", "缩小"].some((value) =>
-              values.includes(value),
-            )
-          )
-            return button;
-          if (
-            direction === "reset" &&
-            [
-              "zoomauto",
-              "zoom-auto",
-              "zoomreset",
-              "zoom-reset",
-              "zoom reset",
-              "reset zoom",
-              "重置",
-            ].some((value) => values.includes(value))
-          )
-            return button;
-        }
-        return null;
-      };
-
       const isLeft = browser === state.leftBrowser;
       for (const direction of ["in", "out", "reset"] as const) {
-        const button = findButton(direction);
+        const button = findReaderZoomButton(browser, direction);
         if (!button) continue;
         const listener = () =>
           this.handleZoomButtonClick(tabID, isLeft, direction);

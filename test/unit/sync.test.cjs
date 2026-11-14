@@ -105,6 +105,10 @@ function setup() {
     {
       "../../platform/readerView": { readerView },
       "../../platform/readerRuntime": { readerRuntime },
+      "../../platform/readerToolbar": {
+        findReaderZoomButton: (_browser, direction) =>
+          direction === "in" ? zoomButton : null,
+      },
     },
   );
   const sync = new SplitSync({

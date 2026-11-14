@@ -116,3 +116,49 @@ test("reader toolbar returns without observing an unavailable browser window", (
   harness.browser.contentWindow = null;
   assert.equal(harness.install(), null);
 });
+
+test("reader toolbar finds localized zoom controls using stable PDF.js IDs", () => {
+  const zoomIn = {};
+  const zoomOut = {};
+  const buttons = new Map([
+    ['[data-l10n-id="pdfjs-zoom-in-button"]', zoomIn],
+    ['[data-l10n-id="pdfjs-zoom-out-button"]', zoomOut],
+  ]);
+  const document = {
+    querySelector: (selector) => buttons.get(selector) || null,
+    querySelectorAll: () => [],
+  };
+  const { findReaderZoomButton } = load("src/platform/readerToolbar.ts");
+  const browser = {
+    contentWindow: { wrappedJSObject: { document } },
+  };
+
+  assert.strictEqual(findReaderZoomButton(browser, "in"), zoomIn);
+  assert.strictEqual(findReaderZoomButton(browser, "out"), zoomOut);
+  assert.equal(findReaderZoomButton(browser, "reset"), null);
+});
+
+test("reader toolbar locates zoom controls by localized labels as a fallback", () => {
+  const buttons = [
+    {
+      className: "",
+      getAttribute: (name) => (name === "aria-label" ? "放大" : ""),
+    },
+    { className: "", getAttribute: (name) => (name === "title" ? "缩小" : "") },
+    {
+      className: "",
+      getAttribute: (name) => (name === "aria-label" ? "重置" : ""),
+    },
+  ];
+  const document = {
+    querySelector: () => null,
+    querySelectorAll: () => buttons,
+  };
+  const { findReaderZoomButton } = load("src/platform/readerToolbar.ts");
+  const browser = { contentWindow: { document } };
+
+  assert.strictEqual(findReaderZoomButton(browser, "in"), buttons[0]);
+  assert.strictEqual(findReaderZoomButton(browser, "out"), buttons[1]);
+  assert.strictEqual(findReaderZoomButton(browser, "reset"), buttons[2]);
+  assert.equal(findReaderZoomButton({ contentWindow: null }, "in"), null);
+});
