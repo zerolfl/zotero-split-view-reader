@@ -77,6 +77,14 @@ describe("palette view", function () {
       root.style.getPropertyValue("--split-view-palette-font-size"),
       "22px",
     );
+    assert.equal(
+      root.style.getPropertyValue("--split-view-palette-panel-width"),
+      "782px",
+    );
+    assert.equal(
+      root.style.getPropertyValue("--split-view-palette-row-padding"),
+      "12px",
+    );
   });
 
   it("clears a query before navigating back and ignores IME Enter", function () {

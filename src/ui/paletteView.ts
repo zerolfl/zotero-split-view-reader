@@ -90,6 +90,30 @@ export class PaletteView {
       "--split-view-palette-font-size",
       `${fontSize}px`,
     );
+    const scale = fontSize / DEFAULT_COMMAND_PALETTE_FONT_SIZE;
+    const scaled = (value: number) => `${Math.round(value * scale)}px`;
+    this.root.style.setProperty(
+      "--split-view-palette-panel-width",
+      scaled(640),
+    );
+    this.root.style.setProperty(
+      "--split-view-palette-panel-padding",
+      scaled(10),
+    );
+    this.root.style.setProperty("--split-view-palette-panel-radius", scaled(8));
+    this.root.style.setProperty(
+      "--split-view-palette-input-padding",
+      scaled(10),
+    );
+    this.root.style.setProperty("--split-view-palette-input-margin", scaled(8));
+    this.root.style.setProperty("--split-view-palette-input-radius", scaled(4));
+    this.root.style.setProperty("--split-view-palette-row-gap", scaled(4));
+    this.root.style.setProperty("--split-view-palette-row-padding", scaled(10));
+    this.root.style.setProperty("--split-view-palette-row-radius", scaled(4));
+    this.root.style.setProperty(
+      "--split-view-palette-empty-padding",
+      scaled(12),
+    );
   }
 
   resetInput(placeholder: string): void {
