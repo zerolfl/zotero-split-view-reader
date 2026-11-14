@@ -22,9 +22,9 @@
     10px; } .svr-color-channel { margin-right: 4px; } .svr-color-input { width:
     60px; margin-right: 8px; } .svr-color-preview { width: 20px; height: 20px;
     margin-left: 4px; border: 1px solid var(--fill-quaternary, #ccc);
-    border-radius: 5px; } .svr-section.svr-section-about {
-    --svr-section-background: transparent; -moz-appearance: none; appearance:
-    none; margin-top: 8px; padding: 0; border: 0; background: transparent; }
+    border-radius: 5px; } .svr-section-about { --svr-section-background:
+    transparent; -moz-appearance: none; appearance: none; margin-top: 8px;
+    padding: 0; border: 0; background: transparent; box-shadow: none; }
     .svr-section-about .svr-section-heading { margin: 0 0 6px; padding: 0 0 8px;
     border: 0; border-radius: 0; background: transparent; }
   </html:style>
@@ -193,7 +193,7 @@
   />
 </groupbox>
 
-<groupbox class="svr-section svr-section-about">
+<vbox class="svr-section-about">
   <!-- About -->
   <html:div class="svr-section-heading">
     <html:h2
@@ -211,4 +211,4 @@
     "
     >⭐ Star it on GitHub</html:a
   >
-</groupbox>
+</vbox>
