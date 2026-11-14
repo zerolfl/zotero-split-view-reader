@@ -9,6 +9,7 @@ import { getPref } from "../../utils/prefs";
 interface SplitTabTitleCallbacks {
   getStates: () => Iterable<SplitTabState>;
   getState: (tabID: string) => SplitTabState | undefined;
+  getItem: (itemID: number) => Zotero.Item | false;
 }
 
 export class SplitTabTitleService {
@@ -35,8 +36,8 @@ export class SplitTabTitleService {
     if (!state || state.isCleaningUp) return;
 
     try {
-      const leftItem = Zotero.Items.get(state.leftItemID);
-      const rightItem = Zotero.Items.get(state.rightItemID);
+      const leftItem = this.callbacks.getItem(state.leftItemID);
+      const rightItem = this.callbacks.getItem(state.rightItemID);
       if (!leftItem || !rightItem) return;
 
       const title = await getSplitViewTabTitleForItems(
@@ -54,8 +55,8 @@ export class SplitTabTitleService {
     const leftItemID = tab?.data?.leftItemID ?? tab?.data?.itemID;
     const rightItemID =
       tab?.data?.rightItemID ?? tab?.data?.leftItemID ?? tab?.data?.itemID;
-    const leftItem = leftItemID ? Zotero.Items.get(leftItemID) : null;
-    const rightItem = rightItemID ? Zotero.Items.get(rightItemID) : null;
+    const leftItem = leftItemID ? this.callbacks.getItem(leftItemID) : null;
+    const rightItem = rightItemID ? this.callbacks.getItem(rightItemID) : null;
     if (!leftItem || !rightItem) return "";
 
     return getSplitViewTabTitleForItems(leftItem, rightItem, this.getMode());

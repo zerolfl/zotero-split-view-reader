@@ -11,6 +11,7 @@ import { attachmentState } from "../platform/attachmentState";
 import { readerView } from "../platform/readerView";
 import { readerRuntime } from "../platform/readerRuntime";
 import { readerApi } from "../platform/readerApi";
+import { itemApi } from "../platform/itemApi";
 import { contextPane as splitContextPane } from "../platform/contextPane";
 import { commandPalette } from "../ui/commandPalette";
 import { PDFSelector } from "./pdfSelector";
@@ -62,7 +63,7 @@ export class SplitViewFactory {
   private static librarySelection = new SplitLibrarySelection({
     getState: (tabID) => this.stateStore.get(tabID) || null,
     getParentItemID: (itemID) => {
-      const item = Zotero.Items.get(itemID);
+      const item = itemApi.get(itemID);
       return item && item.parentItemID ? item.parentItemID : null;
     },
     selectItem: (win, itemID) => libraryPane.selectItem(win, itemID),
@@ -149,6 +150,7 @@ export class SplitViewFactory {
   private static tabTitles = new SplitTabTitleService({
     getStates: () => this.stateStore.values(),
     getState: (id) => this.stateStore.get(id),
+    getItem: (itemID) => itemApi.get(itemID),
   });
   private static readAloudCoordinator = new SplitReadAloudCoordinator({
     states: () => this.stateStore.values(),
@@ -392,7 +394,7 @@ export class SplitViewFactory {
   });
   private static conversion = new SplitViewConversionService({
     getMainWindow: () => Zotero.getMainWindow(),
-    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    getItem: (itemID) => itemApi.get(itemID) || undefined,
     getContainer: (win, tabID) =>
       this.splitReaderTab.getTabContainer(win, tabID),
     getViewState: (reader) => readerView.getViewStateFromReader(reader),
@@ -438,7 +440,7 @@ export class SplitViewFactory {
     captureViewState: (browser) =>
       readerView.getCurrentViewStateFromBrowser(browser),
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
-    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    getItem: (itemID) => itemApi.get(itemID) || undefined,
     getMainWindow: () => Zotero.getMainWindow(),
     initializeReader: (...args) => this.initializeReader(...args),
     setupFocusListeners: (...args) =>
@@ -461,7 +463,7 @@ export class SplitViewFactory {
   });
   private static pdfReplacement = new PDFReplacementService({
     getState: (tabID) => this.stateStore.get(tabID) || null,
-    getItem: (itemID) => Zotero.Items.get(itemID) || undefined,
+    getItem: (itemID) => itemApi.get(itemID) || undefined,
     selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
     getStoredViewState: (item) => attachmentState.getStoredViewState(item),
     replaceBrowser: (tabID, side) => this.readerBrowser.replace(tabID, side),
@@ -489,8 +491,8 @@ export class SplitViewFactory {
     getInitializationPromise: (reader) =>
       readerRuntime.getInitializationPromise(reader),
     hasState: (tabID) => this.stateStore.has(tabID),
-    itemExists: (itemID) => Zotero.Items.exists(itemID),
-    getItem: (itemID) => Zotero.Items.get(itemID) || null,
+    itemExists: (itemID) => itemApi.exists(itemID),
+    getItem: (itemID) => itemApi.get(itemID) || null,
     convertSamePDF: (reader, data) =>
       this.conversion.convertSamePDF(reader, data),
     convertDifferentPDF: (reader, item, data) =>
@@ -536,7 +538,7 @@ export class SplitViewFactory {
     cleanup: (tabID) => this.cleanupTab(tabID),
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
-    getItem: (itemID) => Zotero.Items.get(itemID) || null,
+    getItem: (itemID) => itemApi.get(itemID) || null,
     selectPDF: (libraryID) => this.pdfSelector.select(libraryID),
     convertSamePDF: (reader) => this.conversion.convertSamePDF(reader),
     convertDifferentPDF: (reader, item) =>

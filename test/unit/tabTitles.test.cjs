@@ -53,6 +53,7 @@ function setup(states = []) {
   const service = new SplitTabTitleService({
     getStates: () => states,
     getState: (tabID) => states.find((state) => state.tabID === tabID),
+    getItem: (id) => items.get(id) || false,
   });
   return {
     service,
