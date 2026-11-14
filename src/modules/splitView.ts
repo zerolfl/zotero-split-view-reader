@@ -172,7 +172,7 @@ export class SplitViewFactory {
       this.readAloudCoordinator.clearSide(state as SplitTabState, side),
   });
   private static tabHooks = new TabHooks({
-    hasSplit: (id) => this.hasActiveSplitState(id),
+    hasSplit: (id) => this.stateStore.hasActive(id),
     findRightItem: (itemID) =>
       this.stateStore.findByRightItem(itemID)?.tabID || null,
     getTitle: (tab) => this.tabTitles.getTitleForTab(tab),
@@ -180,7 +180,7 @@ export class SplitViewFactory {
     pauseSplitAudio: () => this.readAloudCoordinator.pauseAll(),
   });
   private static tabContextMenu = new SplitTabContextMenu({
-    isActiveSplitView: (id) => this.hasActiveSplitState(id),
+    isActiveSplitView: (id) => this.stateStore.hasActive(id),
     showInLibrary: (id, win) => this.librarySelection.showActiveItem(id, win),
   });
   private static menuPresentation = new ReaderMenuPresentation({
@@ -223,7 +223,7 @@ export class SplitViewFactory {
   });
   private static session = new SplitSession(
     (id, data) => this.restoreSplitViewFromSession(id, data),
-    (id) => this.hasActiveSplitState(id),
+    (id) => this.stateStore.hasActive(id),
   );
   private static layout = new SplitLayout(
     (id) => this.stateStore.get(id),
@@ -316,7 +316,7 @@ export class SplitViewFactory {
   private static readerToolbar = new SplitReaderToolbar({
     getState: (tabID) => this.stateStore.get(tabID) || null,
     isBrowserAlive: (browser) => readerRuntime.isBrowserAlive(browser),
-    hasActiveSplitState: (tabID) => this.hasActiveSplitState(tabID),
+    hasActiveSplitState: (tabID) => this.stateStore.hasActive(tabID),
     getCloseLabel: () => this.menuPresentation.getCloseViewMenuLabel(),
     closeSide: (tabID, side) => void this.revertToSingleReader(tabID, side),
     installButton: (browser, options) => installCloseButton(browser, options),
@@ -580,14 +580,6 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
-  private static hasActiveSplitState(
-    tabID: string | null | undefined,
-  ): boolean {
-    if (!tabID) return false;
-    const state = this.stateStore.get(tabID);
-    return !!state && !state.isCleaningUp;
-  }
-
   private static getActiveParentItemID(state: SplitTabState): number {
     return state.activeSide === "left"
       ? state.leftParentItemID

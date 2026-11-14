@@ -23,6 +23,12 @@ export class SplitTabStateStore {
     return this.states.has(tabID);
   }
 
+  hasActive(tabID: string | null | undefined): boolean {
+    if (!tabID) return false;
+    const state = this.states.get(tabID);
+    return !!state && !state.isCleaningUp;
+  }
+
   hasAny(): boolean {
     return this.states.size > 0;
   }

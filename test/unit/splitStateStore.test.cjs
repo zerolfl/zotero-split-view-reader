@@ -51,3 +51,17 @@ test("finds a right-side attachment only in an active split state", () => {
   active.isCleaningUp = true;
   assert.equal(store.findByRightItem(42), undefined);
 });
+
+test("reports active split states and excludes missing or cleaning states", () => {
+  const store = new SplitTabStateStore();
+  const active = state("active", 10);
+  const cleaning = state("cleaning", 20, true);
+  store.set(active.tabID, active);
+  store.set(cleaning.tabID, cleaning);
+
+  assert.equal(store.hasActive("active"), true);
+  assert.equal(store.hasActive("cleaning"), false);
+  assert.equal(store.hasActive("missing"), false);
+  assert.equal(store.hasActive(null), false);
+  assert.equal(store.hasActive(undefined), false);
+});
