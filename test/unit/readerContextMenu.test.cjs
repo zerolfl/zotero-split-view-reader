@@ -44,6 +44,9 @@ function setup() {
           };
         },
       },
+      "../../platform/readerContextMenu": load(
+        "src/platform/readerContextMenu.ts",
+      ),
     },
   );
   const service = new SplitReaderContextMenu({

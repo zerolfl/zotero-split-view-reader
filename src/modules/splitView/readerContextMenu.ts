@@ -1,5 +1,6 @@
 import type { SplitSide, SplitTabState } from "./types";
 import { registerReaderEventListener } from "../../platform/readerEvents";
+import { ReaderContextMenuAdapter } from "../../platform/readerContextMenu";
 
 interface PrimaryMenuConfig {
   menuState: "current" | "other" | "none";
@@ -48,10 +49,15 @@ type ContextMenuItem = {
 export class SplitReaderContextMenu {
   private registered = false;
   private disposeListener: (() => void) | null = null;
+  private readonly popupAdapter: ReaderContextMenuAdapter;
   private readonly handler: _ZoteroTypes.Reader.EventHandler<"createViewContextMenu"> =
     (event) => this.onCreateViewContextMenu(event);
 
-  constructor(private readonly callbacks: ReaderContextMenuCallbacks) {}
+  constructor(private readonly callbacks: ReaderContextMenuCallbacks) {
+    this.popupAdapter = new ReaderContextMenuAdapter({
+      setMenuItemIcon: callbacks.setMenuItemIcon,
+    });
+  }
 
   register(pluginID: string): void {
     if (this.registered) return;
@@ -71,68 +77,6 @@ export class SplitReaderContextMenu {
       this.disposeListener = null;
       this.registered = false;
     }
-  }
-
-  private decoratePopup(
-    mainWindow: Window,
-    tabID: string,
-    iconMap: Record<string, string>,
-    contextSide: SplitSide | null,
-  ): void {
-    const onPopupShowing = (event: Event) => {
-      const popup = event.target as Element | null;
-      if (!popup || popup.tagName?.toLowerCase() !== "menupopup") return;
-
-      const items = popup.querySelectorAll("menuitem");
-      let found = false;
-      let primaryItem: Element | null = null;
-      for (const item of items) {
-        const label = item.getAttribute("label");
-        if (label && iconMap[label]) {
-          found = true;
-          item.removeAttribute("type");
-          item.removeAttribute("checked");
-          this.callbacks.setMenuItemIcon(item, iconMap[label]);
-        }
-        if (
-          label &&
-          (["current", "none", "other"] as const).some(
-            (state) => this.callbacks.getSetPrimaryMenuLabel(state) === label,
-          )
-        ) {
-          primaryItem = item;
-        }
-      }
-
-      if (primaryItem && contextSide) {
-        popup.addEventListener(
-          "popupshown",
-          () => {
-            mainWindow.setTimeout(() => {
-              const state = this.callbacks.getState(tabID);
-              if (!state || state.isCleaningUp) return;
-              this.callbacks.activateSide(tabID, contextSide, mainWindow);
-              this.callbacks.refreshPrimaryMenuItem(
-                primaryItem as Element,
-                tabID,
-                contextSide,
-              );
-            }, 0);
-          },
-          { once: true },
-        );
-      }
-
-      if (!found) {
-        mainWindow.document.addEventListener("popupshowing", onPopupShowing, {
-          once: true,
-        });
-      }
-    };
-
-    mainWindow.document.addEventListener("popupshowing", onPopupShowing, {
-      once: true,
-    });
   }
 
   private onCreateViewContextMenu(
@@ -254,6 +198,24 @@ export class SplitReaderContextMenu {
     }
 
     (append as any)(...items);
-    this.decoratePopup(mainWindow, tabID, iconMap, contextSide);
+    this.popupAdapter.decoratePopup(
+      mainWindow,
+      iconMap,
+      (["current", "none", "other"] as const).map((menuState) =>
+        this.callbacks.getSetPrimaryMenuLabel(menuState),
+      ),
+      contextSide
+        ? (primaryItem) => {
+            const currentState = this.callbacks.getState(tabID);
+            if (!currentState || currentState.isCleaningUp) return;
+            this.callbacks.activateSide(tabID, contextSide, mainWindow);
+            this.callbacks.refreshPrimaryMenuItem(
+              primaryItem,
+              tabID,
+              contextSide,
+            );
+          }
+        : undefined,
+    );
   }
 }
