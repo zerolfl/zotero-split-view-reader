@@ -89,7 +89,7 @@ describe("command palette shortcut integration", function () {
       cancel.click();
       assert.isFalse(record.hidden);
       assert.isTrue(cancel.hidden);
-      assert.equal(value.value, originalShortcut);
+      assert.equal(value.value, originalShortcut.split("+").join(" + "));
 
       record.click();
       const cancelEvent = new win.KeyboardEvent("keydown", {
@@ -125,10 +125,10 @@ describe("command palette shortcut integration", function () {
       doc.dispatchEvent(captureEvent);
       assert.isTrue(captureEvent.defaultPrevented);
       assert.equal(getPref("commandPaletteShortcut"), "Ctrl+Alt+K");
-      assert.equal(value.value, "Ctrl+Alt+K");
+      assert.equal(value.value, "Ctrl + Alt + K");
       reset.click();
       assert.equal(getPref("commandPaletteShortcut"), "Shift+P");
-      assert.equal(value.value, "Shift+P");
+      assert.equal(value.value, "Shift + P");
     } finally {
       reset.click();
       addon.data.prefs = previousPrefs;

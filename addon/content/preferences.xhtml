@@ -1,27 +1,44 @@
 <linkset>
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
   <html:style>
-    .svr-section-title { margin: 20px 0 8px 0; } .svr-setting-row { margin: 0; }
-    .svr-setting-desc { font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 0; }
-    .svr-inline-label { margin-right: 8px; } .svr-shortcut-label { white-space:
-    nowrap; } .svr-shortcut-value { box-sizing: border-box; width: 132px;
-    padding: 4px 8px; border: 1px solid var(--fill-quaternary, #aaa);
-    border-radius: 5px; background: var(--material-background, #fff);
-    text-align: center; font: 0.95em monospace; }
+    groupbox.svr-section { box-sizing: border-box; margin: 14px 0; padding: 0
+    14px 12px; border: 1px solid var(--fill-quaternary, #c8c8c8); border-radius:
+    10px; background: rgba(127, 127, 127, 0.06); background: color-mix( in srgb,
+    var(--material-background, #fff) 94%, var(--fill-primary, #222) ); }
+    .svr-section-heading { display: block; margin: 0 -14px 12px; padding: 11px
+    14px 9px; border-bottom: 1px solid var(--fill-quaternary, #d0d0d0);
+    border-radius: 10px 10px 0 0; background: var(--material-background, #fff);
+    } .svr-section-title { margin: 0; font-size: 1.1em; font-weight: 600; }
+    .svr-setting-row { margin: 8px 0; } .svr-setting-desc { margin: 3px 0 10px;
+    font-size: 0.9em; opacity: 0.7; } .svr-inline-label { margin-right: 8px; }
+    .svr-shortcut-label { white-space: nowrap; font-weight: 500; }
+    .svr-shortcut-value { box-sizing: border-box; width: 202px; padding: 8px
+    10px; border: 1px solid var(--fill-quaternary, #aaa); border-radius: 5px;
+    background: var(--material-background, #fff); text-align: center;
+    font-family: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", Consolas,
+    "Liberation Mono", monospace; font-size: 18px; letter-spacing: 0.02em; }
     .svr-shortcut-value[data-recording="true"] { color: var(--color-accent,
-    #1769c2); } .svr-shortcut-button { margin-left: 6px; }
+    #1769c2); } .svr-shortcut-button { margin-left: 6px; } .svr-color-row {
+    margin-top: 0; } .svr-color-label { margin-right: 10px; } .svr-color-channel
+    { margin-right: 4px; } .svr-color-input { width: 60px; margin-right: 8px; }
+    .svr-color-preview { width: 20px; height: 20px; margin-left: 4px; border:
+    1px solid var(--fill-quaternary, #ccc); border-radius: 5px; }
+    .svr-section-about { margin-top: 18px; padding: 0; border: 0; background:
+    transparent; } .svr-section-about .svr-section-heading { margin: 0 0 8px;
+    padding: 0 0 8px; border: 0; border-radius: 0; background: transparent; }
   </html:style>
 </linkset>
 <groupbox
+  class="svr-section"
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
   <!-- Basic Settings -->
-  <label>
+  <html:div class="svr-section-heading">
     <html:h2
       data-l10n-id="pref-section-basic"
       class="svr-section-title"
     ></html:h2>
-  </label>
+  </html:div>
   <checkbox
     id="zotero-prefpane-__addonRef__-follow-focus"
     preference="followFocusPrimary"
@@ -102,72 +119,66 @@
   />
 </groupbox>
 
-<groupbox>
+<groupbox class="svr-section">
   <!-- Appearance Settings -->
-  <label>
+  <html:div class="svr-section-heading">
     <html:h2
       data-l10n-id="pref-section-appearance"
-      style="margin: 20px 0 0px 0"
+      class="svr-section-title"
     ></html:h2>
-  </label>
-  <hbox align="center" style="margin-top: 0">
+  </html:div>
+  <hbox align="center" class="svr-setting-row svr-color-row">
     <html:label
       data-l10n-id="pref-scrollbar-color"
-      style="margin-right: 8px"
+      class="svr-color-label"
     ></html:label>
-    <html:span style="margin-right: 4px">R</html:span>
+    <html:span class="svr-color-channel">R</html:span>
     <html:input
       type="number"
       id="zotero-prefpane-__addonRef__-scrollbar-r"
       min="0"
       max="255"
       preference="primaryScrollbarR"
-      style="width: 60px; margin-right: 8px"
+      class="svr-color-input"
     />
-    <html:span style="margin-right: 4px">G</html:span>
+    <html:span class="svr-color-channel">G</html:span>
     <html:input
       type="number"
       id="zotero-prefpane-__addonRef__-scrollbar-g"
       min="0"
       max="255"
       preference="primaryScrollbarG"
-      style="width: 60px; margin-right: 8px"
+      class="svr-color-input"
     />
-    <html:span style="margin-right: 4px">B</html:span>
+    <html:span class="svr-color-channel">B</html:span>
     <html:input
       type="number"
       id="zotero-prefpane-__addonRef__-scrollbar-b"
       min="0"
       max="255"
       preference="primaryScrollbarB"
-      style="width: 60px; margin-right: 8px"
+      class="svr-color-input"
     />
     <html:div
       id="zotero-prefpane-__addonRef__-color-preview"
-      style="
-        width: 20px;
-        height: 20px;
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        margin-left: 4px;
-      "
+      class="svr-color-preview"
     />
   </hbox>
   <description
     data-l10n-id="pref-scrollbar-color-desc"
-    style="font-size: 0.9em; opacity: 0.7; margin: 2px 0 8px 0"
+    class="svr-setting-desc"
   />
 </groupbox>
 
-<groupbox>
+<groupbox class="svr-section svr-section-about">
   <!-- About -->
-  <label>
+  <html:div class="svr-section-heading">
     <html:h2
       data-l10n-id="pref-section-about"
-      style="margin: 20px 0 8px 0"
+      class="svr-section-title"
     ></html:h2>
-  </label>
-  <description data-l10n-id="pref-about-desc" style="margin: 0 0 8px 0" />
+  </html:div>
+  <description data-l10n-id="pref-about-desc" class="svr-setting-desc" />
   <html:a
     href="https://github.com/zerolfl/zotero-split-view-reader"
     style="text-decoration: none; cursor: pointer"

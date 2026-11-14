@@ -148,8 +148,9 @@ function syncCommandShortcut(doc: Document) {
   if (!value) return;
   const shortcut =
     getPref("commandPaletteShortcut") || DEFAULT_COMMAND_SHORTCUT;
-  if ("value" in value) (value as HTMLInputElement).value = shortcut;
-  else value.textContent = shortcut;
+  const displayShortcut = shortcut.split("+").join(" + ");
+  if ("value" in value) (value as HTMLInputElement).value = displayShortcut;
+  else value.textContent = displayShortcut;
 }
 
 function bindCommandShortcutEvents(doc: Document) {
