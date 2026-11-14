@@ -5,6 +5,8 @@ import { readerRuntime } from "../src/platform/readerRuntime";
 import { readerView } from "../src/platform/readerView";
 import { annotationStore } from "../src/platform/annotationStore";
 import { readerReadAloud } from "../src/platform/readerReadAloud";
+import { findReaderZoomButton } from "../src/platform/readerToolbar";
+import { getPref, setPref } from "../src/utils/prefs";
 import { createPDFAttachment } from "./fixtures/pdf";
 
 describe("split reader integration", function () {
@@ -74,12 +76,15 @@ describe("split reader integration", function () {
     factory.primaryView.setSide(tabID, side);
   }
 
-  async function waitFor(check: () => boolean): Promise<void> {
+  async function waitFor(
+    check: () => boolean,
+    label = "reader state",
+  ): Promise<void> {
     for (let i = 0; i < 100; i++) {
       if (check()) return;
       await Zotero.Promise.delay(30);
     }
-    assert.fail(`Timed out waiting for reader state: ${errors.join("; ")}`);
+    assert.fail(`Timed out waiting for ${label}: ${errors.join("; ")}`);
   }
 
   function contentData(browser: XULBrowserElement, value: any): any {
@@ -236,6 +241,219 @@ describe("split reader integration", function () {
       }
       assert.isFalse(state.ctrlPressed, "reader keyup releases Ctrl");
     }
+  });
+
+  describe("reader interactions", function () {
+    let followFocus: boolean;
+
+    beforeEach(function () {
+      followFocus = getPref("followFocusPrimary");
+      setPref("followFocusPrimary", false);
+    });
+
+    afterEach(function () {
+      setPref("followFocusPrimary", followFocus);
+    });
+
+    async function prepare() {
+      const state = await open(false);
+      setPrimarySide(state.tabID, null);
+      const readers = [state.leftBrowser, state.rightBrowser].map((browser) =>
+        readerRuntime.getInternalReaderFromBrowser(browser),
+      );
+      for (const reader of readers)
+        await readerView.applyViewStateToReader(reader, {
+          pageIndex: 0,
+          scale: 100,
+        });
+      const containers = [state.leftBrowser, state.rightBrowser].map(
+        (browser) => readerView.getViewerContainerFromBrowser(browser)!,
+      );
+      containers[0].scrollTo(0, 100);
+      containers[1].scrollTo(0, 200);
+      await Zotero.Promise.delay(250);
+      setPrimarySide(state.tabID, "left");
+      return { state, readers, containers };
+    }
+
+    it("syncs actual scroll deltas from either primary side and stops with no primary", async function () {
+      const {
+        state,
+        containers: [first, second],
+      } = await prepare();
+      const initialRight = second.scrollTop;
+      const initialLeft = first.scrollTop;
+      first.scrollTop += 80;
+      await waitFor(() => Math.abs(second.scrollTop - initialRight - 80) <= 1);
+      setPrimarySide(state.tabID, "right");
+      second.scrollTop += 50;
+      await waitFor(() => Math.abs(first.scrollTop - initialLeft - 130) <= 1);
+      setPrimarySide(state.tabID, null);
+      const independent = second.scrollTop;
+      first.scrollTop += 40;
+      await Zotero.Promise.delay(200);
+      assert.equal(second.scrollTop, independent);
+    });
+
+    it("forwards native toolbar zoom only from the primary side", async function () {
+      const { state, readers } = await prepare();
+      const scale = (index: number) =>
+        readerView.getPdfViewerFromReader(readers[index]).currentScale;
+      const clickZoom = (browser: XULBrowserElement) => {
+        const button = findReaderZoomButton(browser, "in") as HTMLElement;
+        assert.ok(button);
+        button.click();
+      };
+      const original = scale(0);
+      clickZoom(state.leftBrowser);
+      await waitFor(() => scale(0) > original && scale(1) > original);
+      assert.closeTo(scale(0), scale(1), 0.001);
+      await Zotero.Promise.delay(200);
+      const leftScale = scale(0);
+      const rightScale = scale(1);
+      clickZoom(state.rightBrowser);
+      await waitFor(() => scale(1) > rightScale);
+      assert.equal(scale(0), leftScale);
+      setPrimarySide(state.tabID, null);
+      const independent = scale(1);
+      clickZoom(state.leftBrowser);
+      await waitFor(() => scale(0) > leftScale);
+      assert.equal(scale(1), independent);
+    });
+
+    it("links native sidebar buttons only from the primary side", async function () {
+      const { state, readers } = await prepare();
+      const toggle = (browser: XULBrowserElement) => {
+        const document = (browser.contentWindow as any).wrappedJSObject
+          .document;
+        const button = document.querySelector(".toolbar-button.sidebar-toggle");
+        assert.ok(button);
+        button.click();
+      };
+      const original = readers[0]._state.sidebarOpen;
+      toggle(state.leftBrowser);
+      await waitFor(() =>
+        readers.every((reader) => reader._state.sidebarOpen === !original),
+      );
+      await waitFor(() => !state.syncPaused);
+      toggle(state.rightBrowser);
+      await waitFor(() => readers[1]._state.sidebarOpen === original);
+      assert.equal(readers[0]._state.sidebarOpen, !original);
+      setPrimarySide(state.tabID, null);
+      toggle(state.leftBrowser);
+      await waitFor(() => readers[0]._state.sidebarOpen === original);
+      assert.equal(readers[1]._state.sidebarOpen, original);
+    });
+
+    it("follows actual reader focus only when enabled and preserves no-primary mode", async function () {
+      const { state } = await prepare();
+      const focus = (browser: XULBrowserElement) => {
+        Zotero.getMainWindow().focus();
+        browser.focus();
+        const document = (browser.contentWindow as any).wrappedJSObject
+          .document;
+        document.querySelector(".toolbar-button.find").focus();
+      };
+      focus(state.rightBrowser);
+      await waitFor(
+        () => state.activeSide === "right",
+        "right focus with following disabled",
+      );
+      assert.equal(state.primarySide, "left");
+      setPref("followFocusPrimary", true);
+      focus(state.leftBrowser);
+      await waitFor(
+        () => state.activeSide === "left",
+        "left focus with following enabled",
+      );
+      focus(state.rightBrowser);
+      await waitFor(
+        () => state.primarySide === "right",
+        "right primary from focus",
+      );
+      setPrimarySide(state.tabID, null);
+      focus(state.leftBrowser);
+      await waitFor(
+        () => state.activeSide === "left",
+        "left focus with no primary",
+      );
+      assert.isNull(state.primarySide);
+    });
+
+    it("aligns a reader's position and scale to the other pane", async function () {
+      const { state, readers } = await prepare();
+      setPrimarySide(state.tabID, null);
+      await readerView.applyViewStateToReader(readers[1], {
+        pageIndex: 1,
+        scale: 125,
+      });
+      await factory.sync.syncPositionAndScale(state.tabID, "left");
+      await waitFor(() => !state.syncPaused);
+      const first = readerView.getImmediateViewStateFromReader(readers[0]);
+      const second = readerView.getImmediateViewStateFromReader(readers[1]);
+      assert.equal(first.pageIndex, second.pageIndex);
+      assert.equal(first.scale, second.scale);
+      assert.closeTo(first.top, second.top, 2);
+      assert.closeTo(first.left, second.left, 2);
+    });
+
+    it("cancels a native separator drag with Escape and persists only on release", async function () {
+      const { state } = await prepare();
+      const win = Zotero.getMainWindow();
+      const resizer = state.container.querySelector(".split-view-resizer");
+      const box = resizer.parentElement.getBoundingClientRect();
+      assert.isAbove(box.width, 400);
+      const original = state.splitRatio;
+      const tabs = win.Zotero_Tabs as any;
+      const savedRatio = () => tabs._getTab(state.tabID).tab.data.splitRatio;
+      const drag = (ratio: number) => {
+        const rect = resizer.getBoundingClientRect();
+        win.windowUtils.sendMouseEvent(
+          "mousedown",
+          rect.x,
+          rect.y + rect.height / 2,
+          0,
+          1,
+          0,
+        );
+        assert.ok(state.dragOverlay);
+        win.windowUtils.sendMouseEvent(
+          "mousemove",
+          box.x + box.width * ratio,
+          rect.y + rect.height / 2,
+          0,
+          0,
+          0,
+        );
+      };
+      drag(0.65);
+      await waitFor(() => state.splitRatio > original);
+      assert.equal(savedRatio(), original);
+      const input = Components.classes[
+        "@mozilla.org/text-input-processor;1"
+      ].createInstance(Components.interfaces.nsITextInputProcessor);
+      assert.isTrue(input.beginInputTransactionForTests(win));
+      const escape = () =>
+        new KeyboardEvent("", { key: "Escape", code: "Escape", keyCode: 27 });
+      input.keydown(escape());
+      input.keyup(escape());
+      await waitFor(() => !state.dragOverlay);
+      assert.equal(state.splitRatio, original);
+      assert.equal(savedRatio(), original);
+      drag(0.6);
+      await waitFor(() => state.splitRatio > original);
+      const changed = state.splitRatio;
+      win.windowUtils.sendMouseEvent(
+        "mouseup",
+        box.x + box.width * changed,
+        box.y + box.height / 2,
+        0,
+        1,
+        0,
+      );
+      await waitFor(() => !state.dragOverlay);
+      assert.equal(savedRatio(), changed);
+    });
   });
 
   it("restores different positions of the same PDF and explicit primary and focus settings", async function () {
