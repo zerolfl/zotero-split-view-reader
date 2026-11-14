@@ -72,6 +72,27 @@ describe("split reader integration", function () {
     return state;
   }
 
+  it("keeps the split-view command enabled in a native reader context menu", async function () {
+    const reader = (await Zotero.Reader.open(left.id))!;
+    await readerRuntime.waitForReaderReady(reader);
+
+    const contextMenu = factory.readerContextMenu;
+    const decoratePopup = contextMenu.popupAdapter.decoratePopup;
+    const items: any[] = [];
+    contextMenu.popupAdapter.decoratePopup = () => {};
+    try {
+      contextMenu.handler({
+        reader,
+        append: (...entries: any[]) => items.push(...entries),
+      });
+    } finally {
+      contextMenu.popupAdapter.decoratePopup = decoratePopup;
+    }
+
+    assert.lengthOf(items, 1);
+    assert.isFalse(items[0].disabled);
+  });
+
   function setPrimarySide(tabID: string, side: "left" | "right" | null) {
     factory.primaryView.setSide(tabID, side);
   }

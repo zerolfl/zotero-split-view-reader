@@ -42,7 +42,7 @@ interface ReaderContextMenuCallbacks {
 
 type ContextMenuItem = {
   label: string;
-  disabled?: boolean;
+  disabled: boolean;
   onCommand: () => void | Promise<void>;
 };
 
@@ -126,6 +126,7 @@ export class SplitReaderContextMenu {
       const string = (key: string) => this.callbacks.getString(key);
       items.push({
         label: string("splitview-swap-pdf"),
+        disabled: false,
         onCommand: () => this.callbacks.swapPDFs(tabID),
       });
       iconMap[string("splitview-swap-pdf")] = this.callbacks.getIconURI(
@@ -133,6 +134,7 @@ export class SplitReaderContextMenu {
       );
       items.push({
         label: string("splitview-separate-views"),
+        disabled: false,
         onCommand: () => {
           const side = getClickedSide();
           if (side) this.callbacks.separateViews(tabID, side);
@@ -142,6 +144,7 @@ export class SplitReaderContextMenu {
         this.callbacks.getIconURI("separate_24dp.svg");
       items.push({
         label: menuLabel,
+        disabled: false,
         onCommand: () => {
           const currentState = this.callbacks.getState(tabID);
           if (currentState && !currentState.isCleaningUp) {
@@ -174,6 +177,7 @@ export class SplitReaderContextMenu {
       });
       items.push({
         label: string("splitview-open-another"),
+        disabled: false,
         onCommand: async () => {
           const side = getClickedSide();
           if (side) await this.callbacks.selectAndLoadPDF(tabID, side);
@@ -183,6 +187,7 @@ export class SplitReaderContextMenu {
         this.callbacks.getIconURI("file_open_24dp.svg");
       items.push({
         label: string("splitview-sync-position"),
+        disabled: false,
         onCommand: () => {
           const side = getClickedSide();
           if (side) this.callbacks.syncPositionAndScale(tabID, side);
@@ -193,6 +198,7 @@ export class SplitReaderContextMenu {
     } else {
       items.push({
         label: menuLabel,
+        disabled: false,
         onCommand: () => this.callbacks.handleSplitView(reader),
       });
     }
