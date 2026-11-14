@@ -2,6 +2,13 @@ export function tabsForWindow(win: Window = Zotero.getMainWindow()): Tabs {
   return new Tabs((win as any).Zotero_Tabs);
 }
 
+export function tabsForWindowIfAvailable(
+  win: Window = Zotero.getMainWindow(),
+): Tabs | null {
+  const tabs = (win as any).Zotero_Tabs;
+  return tabs ? new Tabs(tabs) : null;
+}
+
 export function setTabAudioStatus(
   tabID: string,
   status: any,

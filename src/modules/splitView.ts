@@ -6,7 +6,11 @@ import { annotationStore } from "../platform/annotationStore";
 import { reportAnnotationFailure } from "../platform/readerAnnotations";
 import { SplitSession } from "./splitView/session";
 import { TabHooks } from "../platform/tabHooks";
-import { setTabAudioStatus, tabsForWindow } from "../platform/tabs";
+import {
+  setTabAudioStatus,
+  tabsForWindow,
+  tabsForWindowIfAvailable,
+} from "../platform/tabs";
 import { attachmentState } from "../platform/attachmentState";
 import { readerView } from "../platform/readerView";
 import { readerRuntime } from "../platform/readerRuntime";
@@ -519,10 +523,7 @@ export class SplitViewFactory {
             : "splitview-select-second-pdf",
         ),
       ),
-    getTabs: () => {
-      const win = Zotero.getMainWindow();
-      return (win as any).Zotero_Tabs ? tabsForWindow(win) : null;
-    },
+    getTabs: () => tabsForWindowIfAvailable(Zotero.getMainWindow()),
     getReader: (tabID) => readerApi.getByTabID(tabID),
     openReader: (itemID) => readerApi.open(itemID),
     wait: (milliseconds) =>

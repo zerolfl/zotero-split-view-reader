@@ -12,7 +12,11 @@ function setup(tabAPI) {
     },
   });
 
-  return { messages, setAudioStatus: tabs.setTabAudioStatus };
+  return {
+    messages,
+    setAudioStatus: tabs.setTabAudioStatus,
+    getTabs: () => tabs.tabsForWindowIfAvailable(win),
+  };
 }
 
 test("forwards audio status to the tab API", () => {
@@ -33,6 +37,18 @@ test("ignores Zotero versions without tab audio status support", () => {
 
   assert.doesNotThrow(() => fixture.setAudioStatus("split-tab", {}));
   assert.deepEqual(fixture.messages, []);
+});
+
+test("returns no tabs adapter when the window has no Zotero tabs", () => {
+  const fixture = setup(undefined);
+
+  assert.equal(fixture.getTabs(), null);
+});
+
+test("returns a tabs adapter when the window exposes Zotero tabs", () => {
+  const fixture = setup({ selectedID: "reader-tab" });
+
+  assert.equal(fixture.getTabs().selectedID, "reader-tab");
 });
 
 test("logs tab audio status failures without propagating them", () => {
