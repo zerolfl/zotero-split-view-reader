@@ -72,6 +72,7 @@ export class SplitViewCreationService {
       tabID,
       ownerWindow: win,
       container: shell.container as unknown as XUL.Box,
+      originalReaderContainer: shell.originalContainer,
       leftBrowser: shell.leftBrowser,
       rightBrowser: shell.rightBrowser,
       leftPopupset: shell.leftPopupset,

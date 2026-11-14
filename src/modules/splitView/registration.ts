@@ -8,7 +8,7 @@ interface SplitViewRegistrationCallbacks {
   registerTitlePreference(name: string): void;
   registerReadAloud(): void;
   registerCommandPalette(win: Window): void;
-  unregisterAll(): void;
+  unregisterAll(): Promise<void>;
 }
 
 export class SplitViewRegistration {
@@ -41,7 +41,7 @@ export class SplitViewRegistration {
     this.callbacks.registerCommandPalette(win);
   }
 
-  unregisterAll(): void {
-    this.callbacks.unregisterAll();
+  unregisterAll(): Promise<void> {
+    return this.callbacks.unregisterAll();
   }
 }

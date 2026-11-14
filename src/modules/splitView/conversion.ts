@@ -90,6 +90,48 @@ export class SplitViewConversionService {
     });
   }
 
+  async restoreSavedSplit(
+    currentReader: any,
+    savedData: RestoredSplitViewState & {
+      leftItemID: number;
+      rightItemID: number;
+      isSamePDF: boolean;
+    },
+  ): Promise<void> {
+    const win = this.deps.getMainWindow();
+    const leftItem = this.deps.getItem(savedData.leftItemID);
+    const rightItem = this.deps.getItem(savedData.rightItemID);
+    if (!leftItem || !rightItem)
+      throw new Error("Saved split view attachments are unavailable");
+
+    const tabID = currentReader.tabID;
+    const container = this.deps.getContainer(win, tabID);
+    if (!container) throw new Error("Tab container not found");
+
+    const currentViewState = await this.deps.getViewState(currentReader);
+    const leftViewState =
+      savedData.leftViewState ??
+      (currentReader.itemID === leftItem.id
+        ? currentViewState
+        : await this.deps.getStoredViewState(leftItem));
+    const rightViewState = savedData.isSamePDF
+      ? (savedData.rightViewState ?? leftViewState)
+      : (savedData.rightViewState ??
+        (currentReader.itemID === rightItem.id
+          ? currentViewState
+          : await this.deps.getStoredViewState(rightItem)));
+
+    await this.convert(currentReader, container, currentViewState, {
+      win,
+      tabID,
+      leftItem,
+      rightItem,
+      leftViewState,
+      rightViewState,
+      isSamePDF: savedData.isSamePDF,
+    });
+  }
+
   private async convert(
     reader: any,
     container: Element,

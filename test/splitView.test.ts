@@ -807,6 +807,59 @@ describe("split reader integration", function () {
     );
   });
 
+  it("restores the active side on disable and automatically rebuilds split view", async function () {
+    const state = await open(false);
+    const rightReader = readerRuntime.getInternalReaderFromBrowser(
+      state.rightBrowser,
+    );
+    await readerView.applyViewStateToReader(rightReader, {
+      pageIndex: 1,
+      scale: 100,
+    });
+    state.primarySide = "left";
+    state.activeSide = "right";
+    factory.session.unregister();
+
+    try {
+      await factory.restoreTabForDisable(state.tabID);
+      const nativeReader = Zotero.Reader.getByTabID(state.tabID)!;
+      assert.ok(nativeReader);
+      await readerRuntime.waitForReaderReady(nativeReader);
+      assert.equal(nativeReader.itemID, right.id);
+
+      const tabs = Zotero.getMainWindow().Zotero_Tabs as any;
+      const data = tabs._getTab(state.tabID).tab.data;
+      assert.isTrue(data.isSplitView);
+      assert.equal(data.itemID, right.id);
+      assert.equal(data.leftItemID, left.id);
+      assert.equal(data.rightItemID, right.id);
+      assert.equal(data.activeSide, "right");
+      assert.equal(data.rightViewState.pageIndex, 1);
+      await waitFor(
+        () =>
+          nativeReader._tabContainer.querySelectorAll("browser").length === 1,
+        "native reader container",
+      );
+
+      factory.session.register();
+      await waitFor(
+        () => factory.stateStore.get(state.tabID)?.activeSide === "right",
+        "automatic split-view restoration",
+      );
+      const restored = factory.stateStore.get(state.tabID);
+      assert.equal(restored.activeSide, "right");
+      assert.equal(restored.leftItemID, left.id);
+      assert.equal(restored.rightItemID, right.id);
+      assert.equal(
+        readerView.getImmediateViewStateFromBrowser(restored.rightBrowser)
+          .pageIndex,
+        1,
+      );
+    } finally {
+      factory.session.register();
+    }
+  });
+
   it("mirrors same-PDF annotations and selections and persists changes from either side", async function () {
     const state = await open(true);
     const first = readerRuntime.getInternalReaderFromBrowser(state.leftBrowser);

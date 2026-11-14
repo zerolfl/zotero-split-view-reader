@@ -6,12 +6,7 @@ export interface SplitSessionRestoreDependencies {
   hasState(tabID: string): boolean;
   itemExists(itemID: number): boolean;
   getItem(itemID: number): Zotero.Item | null;
-  convertSamePDF(reader: any, savedData: any): Promise<void>;
-  convertDifferentPDF(
-    reader: any,
-    item: Zotero.Item,
-    savedData: any,
-  ): Promise<void>;
+  restoreSavedSplit(reader: any, savedData: any): Promise<void>;
   getState(tabID: string): SplitTabState | null;
   updateBrowserFlex(state: SplitTabState, ratio: number): void;
   updateScrollbarColors(tabID: string): void;
@@ -53,8 +48,7 @@ export class SplitSessionRestore {
     }
 
     const leftItem = this.deps.getItem(leftItemID);
-    const rightItem = this.deps.getItem(rightItemID);
-    if (!leftItem || !rightItem) {
+    if (!leftItem || !this.deps.getItem(rightItemID)) {
       this.deps.debug("Split view: Cannot restore - failed to get items");
       return;
     }
@@ -62,11 +56,7 @@ export class SplitSessionRestore {
     this.deps.debug(
       `Split view: Restoring split view for tab ${tabID} (isSamePDF: ${isSamePDF})`,
     );
-    if (isSamePDF) {
-      await this.deps.convertSamePDF(reader, restoredData);
-    } else {
-      await this.deps.convertDifferentPDF(reader, rightItem, restoredData);
-    }
+    await this.deps.restoreSavedSplit(reader, restoredData);
 
     const state = this.deps.getState(tabID);
     if (state) this.restoreSettings(tabID, state, restoredData);

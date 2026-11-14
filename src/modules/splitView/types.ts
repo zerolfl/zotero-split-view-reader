@@ -16,6 +16,7 @@ export interface SplitTabState {
   tabID: string;
   ownerWindow: Window;
   container: XUL.Box;
+  originalReaderContainer: Element;
   leftBrowser: XULBrowserElement;
   rightBrowser: XULBrowserElement;
   leftPopupset: XULElement;

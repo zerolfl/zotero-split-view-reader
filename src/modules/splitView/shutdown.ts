@@ -6,6 +6,7 @@ export interface SplitViewShutdownDependencies {
   getStates(): Iterable<SplitTabState>;
   saveAll(states: Iterable<SplitTabState>): void;
   getTabIDs(): Iterable<string>;
+  restoreTabForDisable(tabID: string): Promise<void>;
   cleanupTabResources(tabID: string): void;
   clearStates(): void;
   unregisterSession(): void;
@@ -39,22 +40,9 @@ export class SplitViewShutdown {
     this.deps.unregisterCommandPalette(win);
   }
 
-  unregisterAll(): void {
+  async unregisterAll(): Promise<void> {
     this.deps.disposePDFSelector();
     this.deps.unregisterReaderContextMenu();
-    this.deps.saveAll(this.deps.getStates());
-
-    for (const tabID of this.deps.getTabIDs()) {
-      try {
-        this.deps.cleanupTabResources(tabID);
-      } catch (error) {
-        this.deps.debug(
-          `Split view: unregisterAll - cleanupTabResources(${tabID}) failed: ${error}`,
-        );
-      }
-    }
-    this.deps.clearStates();
-
     this.deps.unregisterSession();
     this.deps.unregisterTabNotifier();
     this.deps.unregisterScrollbarObservers();
@@ -62,5 +50,17 @@ export class SplitViewShutdown {
     this.deps.unregisterReadAloud();
     this.deps.unregisterTabLookup();
     this.deps.unregisterCommandPalette();
+
+    for (const tabID of this.deps.getTabIDs()) {
+      try {
+        await this.deps.restoreTabForDisable(tabID);
+      } catch (error) {
+        this.deps.debug(
+          `Split view: unregisterAll - restoreTabForDisable(${tabID}) failed: ${error}`,
+        );
+        this.deps.cleanupTabResources(tabID);
+      }
+    }
+    this.deps.clearStates();
   }
 }

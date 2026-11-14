@@ -528,10 +528,8 @@ export class SplitViewFactory {
     hasState: (tabID) => this.stateStore.has(tabID),
     itemExists: (itemID) => itemApi.exists(itemID),
     getItem: (itemID) => itemApi.get(itemID) || null,
-    convertSamePDF: (reader, data) =>
-      this.conversion.convertSamePDF(reader, data),
-    convertDifferentPDF: (reader, item, data) =>
-      this.conversion.convertDifferentPDF(reader, item, data),
+    restoreSavedSplit: (reader, data) =>
+      this.conversion.restoreSavedSplit(reader, data),
     getState: (tabID) => this.stateStore.get(tabID) || null,
     updateBrowserFlex: (state, ratio) =>
       this.layout.updateBrowserFlex(
@@ -590,6 +588,7 @@ export class SplitViewFactory {
     getStates: () => this.stateStore.values(),
     saveAll: (states) => this.tabNotifier.saveAll(states),
     getTabIDs: () => this.stateStore.keys(),
+    restoreTabForDisable: (tabID) => this.restoreTabForDisable(tabID),
     cleanupTabResources: (tabID) => this.tabCleanup.cleanup(tabID),
     clearStates: () => this.stateStore.clear(),
     unregisterSession: () => this.session.unregister(),
@@ -673,8 +672,69 @@ export class SplitViewFactory {
    * Unregister all split view notifiers and cleanup.
    * This should be called during plugin shutdown.
    */
-  static unregisterAll() {
-    this.registration.unregisterAll();
+  static unregisterAll(): Promise<void> {
+    return this.registration.unregisterAll();
+  }
+
+  private static async restoreTabForDisable(tabID: string): Promise<void> {
+    const state = this.stateStore.get(tabID);
+    if (!state) return;
+
+    const win = state.ownerWindow;
+    const tabs = tabsForWindow(win);
+    const tab = tabs.lookup(tabID).tab;
+    if (!tab || win.closed) {
+      this.tabCleanup.cleanup(tabID);
+      return;
+    }
+
+    const itemID =
+      state.activeSide === "left" ? state.leftItemID : state.rightItemID;
+    const item = itemApi.get(itemID);
+
+    try {
+      await this.tabNotifier.saveStateAndWait(state);
+    } catch (error) {
+      Zotero.debug(
+        `Split view: disable - saving state for ${tabID} failed: ${error}`,
+      );
+    }
+    this.session.write(state, itemID);
+    const viewState =
+      state.activeSide === "left" ? state.leftViewState : state.rightViewState;
+
+    const originalTitle = state.originalTitle;
+    const originalReaderContainer = state.originalReaderContainer;
+    state.isCleaningUp = true;
+    for (const browser of [state.leftBrowser, state.rightBrowser]) {
+      try {
+        this.readAloudCoordinator.pauseBrowser(browser, true);
+        const reader = readerRuntime.getReaderForBrowser(browser);
+        if (reader) await readerRuntime.closeReaderWithoutClosingTab(reader);
+      } catch (error) {
+        Zotero.debug(
+          `Split view: disable - closing reader for ${tabID} failed: ${error}`,
+        );
+      }
+    }
+    state.isCleaningUp = false;
+
+    this.tabCleanup.cleanup(tabID);
+    this.splitReaderTab.restore(win, tabID, originalReaderContainer);
+
+    const reader = await readerApi.open(itemID, undefined, {
+      tabID,
+      allowDuplicate: true,
+      openInBackground: tabs.selectedID !== tabID,
+    });
+    if (!reader) throw new Error("Native reader was not restored");
+    await readerRuntime.waitForReaderReady(reader);
+    if (viewState) await readerView.applyViewStateToReader(reader, viewState);
+
+    this.session.writeSavedState(state, itemID);
+    if (originalTitle) await tabs.rename(tabID, originalTitle);
+    if (item)
+      splitContextPane.updateItem(tabID, win, item.parentItemID || item.id);
   }
 
   static unregisterWindow(win: Window) {

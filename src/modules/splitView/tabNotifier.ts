@@ -71,6 +71,33 @@ export class SplitTabNotifier {
     this.saveState(state);
   }
 
+  async saveStateAndWait(state: SplitTabState): Promise<void> {
+    const leftViewState = this.captureViewState(state.leftBrowser);
+    const rightViewState = this.captureViewState(state.rightBrowser);
+    const entries: [number, any][] =
+      state.leftItemID === state.rightItemID
+        ? [
+            [
+              state.leftItemID,
+              state.activeSide === "right"
+                ? rightViewState || state.rightViewState
+                : leftViewState || state.leftViewState,
+            ],
+          ]
+        : [
+            [state.leftItemID, leftViewState || state.leftViewState],
+            [state.rightItemID, rightViewState || state.rightViewState],
+          ];
+
+    state.leftViewState = leftViewState || state.leftViewState;
+    state.rightViewState = rightViewState || state.rightViewState;
+    await Promise.all(
+      entries.map(([itemID, viewState]) =>
+        this.deps.saveViewState(itemID, viewState),
+      ),
+    );
+  }
+
   unregister(): void {
     if (!this.id) return;
     try {
@@ -82,46 +109,16 @@ export class SplitTabNotifier {
   }
 
   private saveState(state: SplitTabState): void {
-    const leftBrowser = state.leftBrowser;
-    const rightBrowser = state.rightBrowser;
-    const leftItemID = state.leftItemID;
-    const rightItemID = state.rightItemID;
-    const leftFallback = state.leftViewState;
-    const rightFallback = state.rightViewState;
-    let leftViewState: any = null;
-    let rightViewState: any = null;
+    void this.saveStateAndWait(state).catch(() => {
+      // Ignore save errors while tabs or the application are closing.
+    });
+  }
+
+  private captureViewState(browser: XULBrowserElement): any {
     try {
-      leftViewState = this.deps.captureViewState(leftBrowser);
+      return this.deps.captureViewState(browser);
     } catch {
-      // Browser may be dead.
-    }
-    try {
-      rightViewState = this.deps.captureViewState(rightBrowser);
-    } catch {
-      // Browser may be dead.
-    }
-    try {
-      const entries: [number, any][] =
-        leftItemID === rightItemID
-          ? [
-              [
-                leftItemID,
-                state.activeSide === "right"
-                  ? rightViewState || rightFallback
-                  : leftViewState || leftFallback,
-              ],
-            ]
-          : [
-              [leftItemID, leftViewState || leftFallback],
-              [rightItemID, rightViewState || rightFallback],
-            ];
-      void Promise.all(
-        entries.map(([itemID, view]) => this.deps.saveViewState(itemID, view)),
-      ).catch(() => {
-        // Ignore save errors while tabs or the application are closing.
-      });
-    } catch {
-      // Ignore synchronous save errors while tabs are closing.
+      return null;
     }
   }
 }

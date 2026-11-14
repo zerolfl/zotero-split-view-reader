@@ -12,6 +12,7 @@ interface SplitReaderTabState {
 
 export interface SplitReaderTabShell {
   container: HTMLElement;
+  originalContainer: Element;
   mainHbox: XULElement;
   leftBrowser: XULBrowserElement;
   rightBrowser: XULBrowserElement;
@@ -160,6 +161,7 @@ export class SplitReaderTabAdapter {
     oldContainer.parentNode.replaceChild(container, oldContainer);
     return {
       container,
+      originalContainer: oldContainer,
       mainHbox,
       leftBrowser,
       rightBrowser,

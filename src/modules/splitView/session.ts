@@ -68,7 +68,7 @@ export class SplitSession {
     if (state) this.write(state);
   }
 
-  write(state: SplitTabState): void {
+  write(state: SplitTabState, itemID = state.leftItemID): void {
     if (state.isCleaningUp) return;
     for (const side of ["left", "right"] as const) {
       const visible = readerView.getImmediateViewStateFromBrowser(
@@ -81,10 +81,14 @@ export class SplitSession {
         };
       }
     }
+    this.writeSavedState(state, itemID);
+  }
+
+  writeSavedState(state: SplitTabState, itemID = state.leftItemID): void {
     const tabs = tabsForWindow(state.container.ownerGlobal || undefined);
     tabs.clearDataFields(state.tabID, ["syncEnabled"]);
     tabs.setTabData(state.tabID, {
-      itemID: state.leftItemID,
+      itemID,
       leftItemID: state.leftItemID,
       rightItemID: state.rightItemID,
       isSplitView: true,

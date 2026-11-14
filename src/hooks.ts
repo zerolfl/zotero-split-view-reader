@@ -42,8 +42,8 @@ async function onMainWindowUnload(win: Window): Promise<void> {
   SplitViewFactory.unregisterWindow(win);
 }
 
-function onShutdown(): void {
-  SplitViewFactory.unregisterAll();
+async function onShutdown(): Promise<void> {
+  await SplitViewFactory.unregisterAll();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
   // Remove addon object
