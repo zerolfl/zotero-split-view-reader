@@ -29,6 +29,12 @@ export class SplitTabStateStore {
     return !!state && !state.isCleaningUp;
   }
 
+  getActiveParentItemID(state: SplitTabState): number {
+    return state.activeSide === "left"
+      ? state.leftParentItemID
+      : state.rightParentItemID;
+  }
+
   hasAny(): boolean {
     return this.states.size > 0;
   }

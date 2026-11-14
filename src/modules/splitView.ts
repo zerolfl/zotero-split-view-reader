@@ -92,7 +92,8 @@ export class SplitViewFactory {
   });
   private static tabNotifier = new SplitTabNotifier({
     getState: (tabID) => this.stateStore.get(tabID) || null,
-    getActiveParentItemID: (state) => this.getActiveParentItemID(state),
+    getActiveParentItemID: (state) =>
+      this.stateStore.getActiveParentItemID(state),
     showForSplitView: (win) => splitContextPane.showForSplitView(win),
     updateContextPane: (tabID, win, itemID) =>
       splitContextPane.updateItem(tabID, win, itemID),
@@ -580,12 +581,6 @@ export class SplitViewFactory {
     isActive: (browser) =>
       !!this.readAloudCoordinator.getActiveReaderInfoByBrowser(browser),
   });
-  private static getActiveParentItemID(state: SplitTabState): number {
-    return state.activeSide === "left"
-      ? state.leftParentItemID
-      : state.rightParentItemID;
-  }
-
   static refreshOpenSplitViewTabTitles(): void {
     this.tabTitles.refreshOpenTabs();
   }

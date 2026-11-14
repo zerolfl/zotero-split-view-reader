@@ -65,3 +65,17 @@ test("reports active split states and excludes missing or cleaning states", () =
   assert.equal(store.hasActive(null), false);
   assert.equal(store.hasActive(undefined), false);
 });
+
+test("resolves the parent item from the active side", () => {
+  const store = new SplitTabStateStore();
+  const active = {
+    ...state("active", 20),
+    activeSide: "left",
+    leftParentItemID: 11,
+    rightParentItemID: 22,
+  };
+
+  assert.equal(store.getActiveParentItemID(active), 11);
+  active.activeSide = "right";
+  assert.equal(store.getActiveParentItemID(active), 22);
+});
