@@ -9,6 +9,7 @@ declare namespace _ZoteroTypes {
     PluginPrefsMap: {
       "followFocusPrimary": boolean;
       "commandPaletteShortcut": string;
+      "commandPaletteFontSize": number;
       "splitTabsTitle": string;
       "primaryScrollbarR": number;
       "primaryScrollbarG": number;

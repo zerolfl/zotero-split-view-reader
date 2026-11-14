@@ -7,6 +7,7 @@ describe("command palette shortcut integration", function () {
   let root: HTMLElement;
   let input: HTMLInputElement;
   let originalShortcut: string;
+  let originalFontSize: number;
 
   beforeEach(function () {
     win = Zotero.getMainWindow();
@@ -14,11 +15,13 @@ describe("command palette shortcut integration", function () {
     assert.ok(root);
     input = root.querySelector("input")!;
     originalShortcut = getPref("commandPaletteShortcut");
+    originalFontSize = getPref("commandPaletteFontSize");
   });
 
   afterEach(function () {
     root.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
     setPref("commandPaletteShortcut", originalShortcut);
+    setPref("commandPaletteFontSize", originalFontSize);
   });
 
   function shortcut(key: string, modifiers: Partial<KeyboardEventInit> = {}) {
@@ -55,12 +58,17 @@ describe("command palette shortcut integration", function () {
   });
 
   it("applies a changed shortcut without recreating the window", function () {
+    setPref("commandPaletteFontSize", 22);
     setPref("commandPaletteShortcut", "Ctrl+Alt+K");
     assert.isFalse(shortcut("P", { shiftKey: true }).defaultPrevented);
     assert.isTrue(
       shortcut("K", { ctrlKey: true, altKey: true }).defaultPrevented,
     );
     assert.isFalse(root.hidden);
+    assert.equal(
+      root.style.getPropertyValue("--split-view-palette-font-size"),
+      "22px",
+    );
   });
 
   it("records and resets the shortcut from plugin settings", async function () {
@@ -75,13 +83,28 @@ describe("command palette shortcut integration", function () {
     cancel.id = `zotero-prefpane-${config.addonRef}-command-shortcut-cancel`;
     const reset = doc.createElement("button");
     reset.id = `zotero-prefpane-${config.addonRef}-command-shortcut-reset`;
+    const fontSizeMenu = doc.createElement("div") as HTMLDivElement & {
+      value: string;
+      selectedItem: Element | null;
+    };
+    fontSizeMenu.id = `zotero-prefpane-${config.addonRef}-command-palette-font-size`;
+    for (const size of [14, 16, 18, 20, 22]) {
+      const option = doc.createElement("menuitem");
+      option.setAttribute("value", String(size));
+      option.setAttribute("label", `${size} px`);
+      fontSizeMenu.appendChild(option);
+    }
     const description = doc.createElement("div");
     description.id = `zotero-prefpane-${config.addonRef}-command-shortcut-desc`;
-    doc.body.append(value, record, cancel, reset, description);
+    doc.body.append(value, record, cancel, reset, fontSizeMenu, description);
     const prefsWindow = { document: doc } as unknown as Window;
 
     try {
       await addon.hooks.onPrefsEvent("load", { window: prefsWindow });
+      assert.equal(fontSizeMenu.value, String(originalFontSize));
+      fontSizeMenu.value = "20";
+      fontSizeMenu.dispatchEvent(new win.Event("command", { bubbles: true }));
+      assert.equal(getPref("commandPaletteFontSize"), 20);
       record.click();
       assert.isTrue(record.hidden);
       assert.isFalse(cancel.hidden);
@@ -133,6 +156,7 @@ describe("command palette shortcut integration", function () {
       reset.click();
       addon.data.prefs = previousPrefs;
       setPref("commandPaletteShortcut", originalShortcut);
+      setPref("commandPaletteFontSize", originalFontSize);
     }
   });
 

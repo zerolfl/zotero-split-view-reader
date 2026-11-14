@@ -12,6 +12,7 @@
   padding-top: 12vh;
   background: rgba(0, 0, 0, 0.18);
   font: menu;
+  font-size: var(--split-view-palette-font-size, 18px);
 }
 
 .split-view-palette-panel {

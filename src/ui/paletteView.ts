@@ -3,6 +3,11 @@ import type {
   AttachmentSelectionHandlers,
   AttachmentSelectionRow,
 } from "../modules/attachmentSelector/types";
+import { getPref } from "../utils/prefs";
+import {
+  DEFAULT_COMMAND_PALETTE_FONT_SIZE,
+  normalizeCommandPaletteFontSize,
+} from "./paletteFontSize";
 
 export class PaletteView {
   private root: HTMLDivElement;
@@ -69,11 +74,22 @@ export class PaletteView {
 
   open(placeholder: string, handlers: AttachmentSelectionHandlers): void {
     if (!this.isOpen) this.previousFocus = this.win.document.activeElement;
+    this.refreshFontSize();
     this.handlers = handlers;
     this.root.hidden = false;
     this.list.replaceChildren();
     this.rows = [];
     this.resetInput(placeholder);
+  }
+
+  refreshFontSize(): void {
+    const fontSize = normalizeCommandPaletteFontSize(
+      getPref("commandPaletteFontSize") ?? DEFAULT_COMMAND_PALETTE_FONT_SIZE,
+    );
+    this.root.style.setProperty(
+      "--split-view-palette-font-size",
+      `${fontSize}px`,
+    );
   }
 
   resetInput(placeholder: string): void {

@@ -54,11 +54,21 @@ describe(`startup (Zotero ${clientVersion})`, function () {
       "pref-command-shortcut-record",
       "pref-command-shortcut-reset",
       "pref-command-shortcut-cancel",
+      "pref-command-palette-font-size",
+      "pref-command-palette-font-size-desc",
     ]) {
       const [message] = preferenceLocale.formatMessagesSync([
         { id: `${config.addonRef}-${id}` },
       ]);
       assert.isNotEmpty(message?.value);
+    }
+    for (const id of [14, 16, 18, 20, 22]) {
+      const [message] = preferenceLocale.formatMessagesSync([
+        { id: `${config.addonRef}-pref-command-palette-font-size-${id}` },
+      ]);
+      assert.isNotEmpty(
+        message?.attributes?.find(({ name }) => name === "label")?.value,
+      );
     }
     for (const message of messages.slice(1))
       assert.isNotEmpty(

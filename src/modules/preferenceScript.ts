@@ -2,12 +2,17 @@ import { config } from "../../package.json";
 import { SplitViewFactory } from "./splitView";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
+import { commandPalette } from "../ui/commandPalette";
 import type { SplitTabsTitleMode } from "../utils/splitTabTitle";
 import {
   DEFAULT_COMMAND_SHORTCUT,
   formatShortcut,
   setShortcutCaptureActive,
 } from "../ui/commandShortcut";
+import {
+  DEFAULT_COMMAND_PALETTE_FONT_SIZE,
+  normalizeCommandPaletteFontSize,
+} from "../ui/paletteFontSize";
 
 let cancelCommandShortcutCapture: (() => void) | null = null;
 
@@ -78,6 +83,7 @@ function updatePrefsUI() {
     isSplitTabsTitleMode(mode) ? mode : "filename",
   );
   syncCommandShortcut(doc);
+  syncCommandPaletteFontSize(doc);
 
   // Initialize color preview with current pref values
   updateColorPreview(doc);
@@ -108,6 +114,20 @@ function bindPrefEvents() {
     syncSplitTabsTitleMenulist(doc, mode);
     SplitViewFactory.refreshOpenSplitViewTabTitles();
   });
+
+  const commandPaletteFontSizeMenulist = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-palette-font-size`,
+  ) as (Element & { value: string }) | null;
+  commandPaletteFontSizeMenulist?.addEventListener(
+    "command",
+    (event: Event) => {
+      const target = event.target as Element & { value: string };
+      const fontSize = normalizeCommandPaletteFontSize(Number(target.value));
+      setPref("commandPaletteFontSize", fontSize);
+      syncCommandPaletteFontSize(doc);
+      commandPalette.refreshFontSize();
+    },
+  );
 
   // RGB inputs: Primary scrollbar color
   const rInput = doc.querySelector(
@@ -151,6 +171,32 @@ function syncCommandShortcut(doc: Document) {
   const displayShortcut = shortcut.split("+").join(" + ");
   if ("value" in value) (value as HTMLInputElement).value = displayShortcut;
   else value.textContent = displayShortcut;
+}
+
+function syncCommandPaletteFontSize(doc: Document) {
+  const menulist = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-palette-font-size`,
+  ) as
+    | (Element & {
+        value: string;
+        selectedItem?: Element | null;
+        setAttribute(name: string, value: string): void;
+      })
+    | null;
+  if (!menulist) return;
+
+  const fontSize = normalizeCommandPaletteFontSize(
+    getPref("commandPaletteFontSize") ?? DEFAULT_COMMAND_PALETTE_FONT_SIZE,
+  );
+  menulist.value = String(fontSize);
+  const selectedItem = doc.querySelector(
+    `#zotero-prefpane-${config.addonRef}-command-palette-font-size menuitem[value="${fontSize}"]`,
+  ) as Element | null;
+  if (selectedItem) {
+    menulist.selectedItem = selectedItem;
+    const label = selectedItem.getAttribute("label");
+    if (label) menulist.setAttribute("label", label);
+  }
 }
 
 function bindCommandShortcutEvents(doc: Document) {

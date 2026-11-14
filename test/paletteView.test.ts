@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import { config } from "../package.json";
 import { PaletteView } from "../src/ui/paletteView";
+import { getPref, setPref } from "../src/utils/prefs";
 
 describe("palette view", function () {
   let view: PaletteView;
@@ -11,6 +12,7 @@ describe("palette view", function () {
   let queries: string[];
   let backs: number;
   let closes: number;
+  let originalFontSize: number;
 
   beforeEach(function () {
     win = Zotero.getMainWindow();
@@ -22,6 +24,7 @@ describe("palette view", function () {
     queries = [];
     backs = 0;
     closes = 0;
+    originalFontSize = getPref("commandPaletteFontSize");
     view.open("PDF", {
       input: (text) => queries.push(text),
       back: () => backs++,
@@ -39,6 +42,7 @@ describe("palette view", function () {
 
   afterEach(function () {
     view.destroy();
+    setPref("commandPaletteFontSize", originalFontSize);
   });
 
   function key(value: string, isComposing = false) {
@@ -63,6 +67,15 @@ describe("palette view", function () {
     assert.equal(
       input.getAttribute("aria-activedescendant"),
       first.nextElementSibling!.id,
+    );
+  });
+
+  it("applies the configured font size", function () {
+    setPref("commandPaletteFontSize", 22);
+    view.refreshFontSize();
+    assert.equal(
+      root.style.getPropertyValue("--split-view-palette-font-size"),
+      "22px",
     );
   });
 

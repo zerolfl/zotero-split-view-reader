@@ -87,6 +87,10 @@ class CommandPalette {
     render("");
   }
 
+  refreshFontSize(): void {
+    for (const { view } of this.windows.values()) view.refreshFontSize();
+  }
+
   createSelectionView(): AttachmentSelectionView {
     const win = Zotero.getMainWindow();
     const entry = this.windows.get(win);
